@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="ПРИЁМКА">
+  <rect width="512" height="512" rx="112" fill="#e85d2a"/>
+  <rect x="74" y="74" width="364" height="364" rx="76" fill="#16241d"/>
+  <g>
+    <rect x="139" y="157" width="234" height="56" rx="16" fill="#f6f1e4"/>
+    <rect x="172" y="228" width="234" height="56" rx="16" fill="#e85d2a"/>
+    <rect x="139" y="299" width="234" height="56" rx="16" fill="#f6f1e4"/>
+  </g>
+  <circle cx="392" cy="392" r="13" fill="#f2c14e"/>
+</svg>

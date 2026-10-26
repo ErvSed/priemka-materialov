@@ -1,0 +1,485 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'; connect-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#16241d">
+  <title>ПРИЁМКА — реестр материалов на объекте</title>
+  <meta name="description" content="Простой реестр поступления материалов на объект: дата, наименование, единица измерения, количество. Вход по паролю, история изменений и архив вместо удаления.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="ПРИЁМКА — материалы на объекте">
+  <meta property="og:description" content="Фиксируйте поставки без лишней бюрократии. Вход по паролю. Удаление отключено.">
+  <meta property="og:locale" content="ru_RU">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./assets/icon.svg" type="image/svg+xml">
+  <link rel="icon" href="./assets/favicon-32.png" sizes="32x32" type="image/png">
+  <link rel="apple-touch-icon" href="./assets/apple-touch-icon.png">
+  <link rel="preload" href="./fonts/manrope-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="./fonts/manrope-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <svg class="svg-sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5M12 14.5v2.5"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 5 6v5.5c0 4.4 2.9 7.9 7 9.5 4.1-1.6 7-5.1 7-9.5V6l-7-3Z"/><path d="m9.2 12 1.9 1.9 3.9-4"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.06.06-2.78 2.78-.06-.06a1.8 1.8 0 0 0-1.98-.36 1.8 1.8 0 0 0-1.1 1.65V21H9.9v-.09A1.8 1.8 0 0 0 8.8 19.3a1.8 1.8 0 0 0-1.98.36l-.06.06-2.78-2.78.06-.06A1.8 1.8 0 0 0 4.4 15a1.8 1.8 0 0 0-1.65-1.1H3V9.9h.09A1.8 1.8 0 0 0 4.7 8.8a1.8 1.8 0 0 0-.36-1.98l-.06-.06 2.78-2.78.06.06A1.8 1.8 0 0 0 9 4.4a1.8 1.8 0 0 0 1.1-1.65V3h3.8v.09A1.8 1.8 0 0 0 15 4.7a1.8 1.8 0 0 0 1.98-.36l.06-.06 2.78 2.78-.06.06A1.8 1.8 0 0 0 19.4 9c.2.67.83 1.1 1.51 1.1H21v3.8h-.09A1.8 1.8 0 0 0 19.4 15Z"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="m4 16-.8 4.8L8 20 19 9a2.1 2.1 0 0 0-3-3L5 17Z"/><path d="m14.5 7.5 3 3"/></symbol>
+    <symbol id="i-archive" viewBox="0 0 24 24"><path d="M3.5 7.5h5.7l2 2h9.3v8.5a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5V7.5Z"/><path d="M12 11.5v5M9.8 14.3 12 16.5l2.2-2.2"/></symbol>
+    <symbol id="i-sum" viewBox="0 0 24 24"><path d="M17.5 4.5h-11l5.9 7.5-5.9 7.5h11"/></symbol>
+    <symbol id="i-restore" viewBox="0 0 24 24"><path d="M4 10a8 8 0 1 1 2.4 6.4"/><path d="M4 4v6h6"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="m3 3 18 18M10.6 6c.46-.08.92-.12 1.4-.12 6 0 9.5 6.12 9.5 6.12a16.4 16.4 0 0 1-2.3 3.13M6.1 7.6A16.5 16.5 0 0 0 2.5 12s3.5 6.5 9.5 6.5c1.63 0 3.08-.47 4.33-1.17M9.9 9.9a3 3 0 0 0 4.2 4.2"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5M12 7v5l3 2"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2.8 20h18.4L12 3Z"/><path d="M12 9v5M12 17h.01"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m4.5 12.5 5 5 10-11"/></symbol>
+    <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5.5" rx="7.5" ry="3"/><path d="M4.5 5.5v6c0 1.66 3.36 3 7.5 3s7.5-1.34 7.5-3v-6M4.5 11.5v6c0 1.66 3.36 3 7.5 3s7.5-1.34 7.5-3v-6"/></symbol>
+    <symbol id="i-logout" viewBox="0 0 24 24"><path d="M9 4H5.5A1.5 1.5 0 0 0 4 5.5v13A1.5 1.5 0 0 0 5.5 20H9M15 8l4 4-4 4M19 12H9"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3.5h7l5 5V20a.5.5 0 0 1-.5.5h-11A.5.5 0 0 1 6 20V4a.5.5 0 0 1 .5-.5Z"/><path d="M13 3.5v5h5M9 13h6M9 16.5h6"/></symbol>
+    <symbol id="i-cube" viewBox="0 0 24 24"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/></symbol>
+    <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M7.5 3v4M16.5 3v4M3.5 9.5h17M8 13h.01M12 13h.01M16 13h.01M8 16.5h.01M12 16.5h.01"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/></symbol>
+  </svg>
+
+  <div class="boot-screen" id="bootScreen" role="status" aria-live="polite">
+    <div class="boot-brand">
+      <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+      <span class="boot-word">ПРИЁМКА</span>
+    </div>
+    <div class="boot-loader" aria-hidden="true"><span></span></div>
+    <p>Открываем реестр</p>
+  </div>
+
+  <section class="auth" id="authView" hidden>
+    <div class="auth-hero">
+      <div class="hero-grid" aria-hidden="true"></div>
+      <div class="hero-orbit hero-orbit--one" aria-hidden="true"></div>
+      <div class="hero-orbit hero-orbit--two" aria-hidden="true"></div>
+      <span class="hero-index" aria-hidden="true">01</span>
+      <div class="hero-top">
+        <a class="brand brand--light" href="./" tabindex="-1" aria-label="ПРИЁМКА">
+          <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+          <span class="brand-copy"><strong>ПРИЁМКА</strong><small>материалы объекта</small></span>
+        </a>
+        <span class="hero-stamp">PRM / 2026</span>
+      </div>
+      <div class="hero-content">
+        <p class="eyebrow eyebrow--light"><span class="eyebrow-line"></span>Объектный реестр поставок</p>
+        <h1>Материалы.<br><span>Под контролем.</span></h1>
+        <p class="hero-lead">Каждая поставка — под записью. Дата, наименование, единица измерения и количество в одном надёжном журнале.</p>
+        <ul class="hero-features">
+          <li><span>01</span><div><strong>Быстрая регистрация</strong><small>Новая позиция за несколько секунд</small></div></li>
+          <li><span>02</span><div><strong>История изменений</strong><small>Любую правку можно отследить</small></div></li>
+          <li><span>03</span><div><strong>Без удаления</strong><small>Только архив с подтверждением паролем</small></div></li>
+        </ul>
+      </div>
+      <div class="hero-foot">
+        <p><svg class="icon" aria-hidden="true"><use href="#i-shield"></use></svg>Данные зашифрованы и не покидают устройство</p>
+        <span>УЧЁТ · КОНТРОЛЬ · СОХРАННОСТЬ</span>
+      </div>
+    </div>
+
+    <div class="auth-panel">
+      <div class="auth-panel-top">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span id="authStatusLabel">Защищённый доступ</span>
+      </div>
+      <div class="auth-card">
+        <p class="eyebrow" id="authKicker">Первый запуск</p>
+        <h2 id="authTitle">Создайте доступ</h2>
+        <p class="auth-subtitle" id="authSubtitle">Придумайте логин и пароль. Реестр будет зашифрован на этом устройстве.</p>
+
+        <form id="authForm" novalidate>
+          <div class="field" id="usernameField">
+            <label for="authUsername">Логин</label>
+            <input id="authUsername" name="username" type="text" autocomplete="username" spellcheck="false" maxlength="32" placeholder="Например, admin" required>
+          </div>
+          <div class="field">
+            <label for="authPassword">Пароль</label>
+            <div class="password-wrap">
+              <input id="authPassword" name="password" type="password" autocomplete="current-password" minlength="8" required placeholder="Не менее 8 символов">
+              <button class="password-toggle" type="button" aria-label="Показать пароль" data-password-toggle="authPassword">
+                <svg class="icon" aria-hidden="true"><use href="#i-eye"></use></svg>
+              </button>
+            </div>
+          </div>
+          <div class="field" id="confirmField" hidden>
+            <label for="authConfirm">Повторите пароль</label>
+            <div class="password-wrap">
+              <input id="authConfirm" name="confirm" type="password" autocomplete="new-password" minlength="8" placeholder="Ещё раз">
+              <button class="password-toggle" type="button" aria-label="Показать пароль" data-password-toggle="authConfirm">
+                <svg class="icon" aria-hidden="true"><use href="#i-eye"></use></svg>
+              </button>
+            </div>
+          </div>
+          <p class="field-hint" id="authHint">Минимум 8 символов. Пароль не передаётся по сети.</p>
+          <div class="form-error" id="authError" role="alert" hidden></div>
+          <button class="btn btn--primary btn--auth" id="authSubmit" type="submit">
+            <span id="authSubmitText">Создать реестр</span>
+            <span class="btn-end" aria-hidden="true"><svg class="icon"><use href="#i-arrow"></use></svg></span>
+          </button>
+        </form>
+
+        <div class="restore-block" id="restoreBlock">
+          <span>Есть зашифрованная копия?</span>
+          <button class="link-button" type="button" id="restoreLink">Восстановить реестр</button>
+          <input id="restoreFile" type="file" accept=".json,application/json" hidden>
+        </div>
+
+        <div class="restore-selected" id="restoreSelected" hidden>
+          <div class="restore-file">
+            <svg class="icon" aria-hidden="true"><use href="#i-file"></use></svg>
+            <div><strong id="restoreFileName">backup.json</strong><span id="restoreFileMeta">Зашифрованная копия</span></div>
+          </div>
+          <button class="link-button" type="button" id="cancelRestore">Отменить</button>
+        </div>
+
+        <div class="auth-warning" id="authWarning">
+          <svg class="icon" aria-hidden="true"><use href="#i-alert"></use></svg>
+          <p id="authWarningText">Пароль невозможно восстановить. Сохраните его в надёжном месте и периодически делайте резервную копию.</p>
+        </div>
+        <p class="auth-switch" id="authSwitch" hidden>Уже есть доступ? <button class="link-button" type="button" data-auth-switch="login">Войти в реестр</button></p>
+      </div>
+      <div class="auth-panel-foot">
+        <span>Локальный реестр · v1.0</span>
+        <span>Без сервера и передачи данных</span>
+      </div>
+    </div>
+  </section>
+
+  <div class="app-shell" id="appView" hidden>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="./" id="brandLink" aria-label="ПРИЁМКА — обновить страницу">
+          <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+          <span class="brand-copy"><strong>ПРИЁМКА</strong><small>материалы объекта</small></span>
+        </a>
+        <div class="topbar-label"><span class="live-dot" aria-hidden="true"></span>Реестр объекта</div>
+        <div class="topbar-actions">
+          <div class="user-chip" id="userChip">
+            <span class="avatar" id="avatarInitial">A</span>
+            <span class="user-name" id="accountName">admin</span>
+          </div>
+          <button class="icon-btn" type="button" id="lockBtn" title="Заблокировать реестр" aria-label="Заблокировать реестр">
+            <svg class="icon" aria-hidden="true"><use href="#i-lock"></use></svg>
+          </button>
+          <button class="btn btn--ghost btn--small" type="button" id="settingsBtn">
+            <svg class="icon" aria-hidden="true"><use href="#i-settings"></use></svg>
+            <span>Настройки</span>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main class="main">
+      <section class="page-head">
+        <div class="page-heading">
+          <p class="eyebrow"><span class="eyebrow-line"></span><span id="todayLabel">Сегодня</span> · объектный реестр</p>
+          <h1>Поступление <span class="marker">материалов</span></h1>
+          <p class="page-lead">Фиксируйте поставки и держите объёмы перед глазами.<br> <strong>Удаление отключено</strong> — только архив с подтверждением.</p>
+        </div>
+        <button class="btn btn--accent btn--add" type="button" id="addBtn">
+          <span class="plus-badge" aria-hidden="true"><svg class="icon"><use href="#i-plus"></use></svg></span>
+          <span>Принять материал</span>
+        </button>
+      </section>
+
+      <section class="stats-grid" aria-label="Сводка по реестру">
+        <article class="stat stat--ink">
+          <div class="stat-top"><span>В реестре</span><svg class="icon" aria-hidden="true"><use href="#i-cube"></use></svg></div>
+          <strong id="statActive">0</strong>
+          <p id="statActiveLabel">позиций</p>
+          <span class="stat-accent" aria-hidden="true"></span>
+        </article>
+        <article class="stat">
+          <div class="stat-top"><span>За 7 дней</span><svg class="icon" aria-hidden="true"><use href="#i-calendar"></use></svg></div>
+          <strong id="statWeek">0</strong>
+          <p id="statWeekLabel">поступлений</p>
+        </article>
+        <article class="stat">
+          <div class="stat-top"><span>Единицы</span><svg class="icon" aria-hidden="true"><use href="#i-layers"></use></svg></div>
+          <strong id="statUnits">0</strong>
+          <p id="statUnitsLabel">измерения</p>
+        </article>
+        <article class="stat">
+          <div class="stat-top"><span>В архиве</span><svg class="icon" aria-hidden="true"><use href="#i-shield"></use></svg></div>
+          <strong id="statArchived">0</strong>
+          <p id="statArchivedLabel">сохранено</p>
+        </article>
+      </section>
+
+      <section class="ledger" aria-labelledby="ledgerTitle">
+        <div class="ledger-head">
+          <div class="tabs" aria-label="Разделы реестра">
+            <button class="tab is-active" type="button" id="tabActive" aria-pressed="true" data-view="active">
+              Реестр <span class="tab-count" id="activeCount">0</span>
+            </button>
+            <button class="tab" type="button" id="tabArchive" aria-pressed="false" data-view="archive">
+              Архив <span class="tab-count" id="archiveCount">0</span>
+            </button>
+          </div>
+          <div class="ledger-tools">
+            <label class="search-box" for="searchInput">
+              <svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg>
+              <input id="searchInput" type="search" placeholder="Найти материал…" autocomplete="off" inputmode="search">
+              <span class="sr-only">Поиск по материалам</span>
+            </label>
+            <select id="periodSelect" class="select" aria-label="Период">
+              <option value="all">Всё время</option>
+              <option value="today">Сегодня</option>
+              <option value="7">7 дней</option>
+              <option value="30">30 дней</option>
+            </select>
+            <button class="btn btn--ghost btn--icon-text" type="button" id="exportBtn" title="Скачать таблицу CSV">
+              <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>
+              <span>CSV</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="totals-strip" id="totalsStrip">
+          <span class="totals-label"><svg class="icon" aria-hidden="true"><use href="#i-sum"></use></svg>Итого</span>
+          <div class="unit-totals" id="unitTotals"></div>
+          <span class="totals-empty" id="totalsEmpty">Нет данных за выбранный период</span>
+        </div>
+
+        <div class="table-wrap" id="tableWrap">
+          <table class="ledger-table">
+            <caption class="sr-only">Реестр поступления материалов</caption>
+            <thead>
+              <tr>
+                <th scope="col" class="col-date">Дата</th>
+                <th scope="col" class="col-name">Наименование</th>
+                <th scope="col" class="col-unit">Ед.</th>
+                <th scope="col" class="col-qty">Количество</th>
+                <th scope="col" class="col-actions"><span class="sr-only">Действия</span></th>
+              </tr>
+            </thead>
+            <tbody id="recordsBody"></tbody>
+          </table>
+        </div>
+
+        <div class="empty-state" id="emptyState" hidden>
+          <div class="empty-illustration" aria-hidden="true">
+            <span class="empty-box empty-box--back"></span>
+            <span class="empty-box empty-box--front"></span>
+            <span class="empty-plus"><svg class="icon"><use href="#i-plus"></use></svg></span>
+          </div>
+          <h2 id="emptyTitle">Журнал пока пуст</h2>
+          <p id="emptyText">Добавьте первую поставку — дата, материал, единица и количество.</p>
+          <button class="btn btn--accent" type="button" id="emptyAction">Принять первый материал</button>
+        </div>
+
+        <footer class="ledger-foot">
+          <p class="safety-note"><svg class="icon" aria-hidden="true"><use href="#i-shield"></use></svg><span><strong>Удаление недоступно.</strong> Запись можно только архивировать, подтвердив действие паролем.</span></p>
+          <span class="visible-count" id="visibleCount">0 записей</span>
+        </footer>
+      </section>
+
+      <footer class="app-footer">
+        <span>ПРИЁМКА · локальный реестр материалов</span>
+        <span>Данные зашифрованы и хранятся в этом браузере</span>
+      </footer>
+    </main>
+  </div>
+
+  <dialog class="modal" id="materialDialog" aria-labelledby="materialTitle">
+    <div class="modal-panel modal-panel--wide">
+      <header class="modal-head">
+        <div>
+          <p class="eyebrow" id="materialKicker">Новая позиция</p>
+          <h2 id="materialTitle">Принять материал</h2>
+          <p class="modal-subtitle" id="materialSubtitle">Зафиксируйте поставку. После сохранения запись можно изменить.</p>
+        </div>
+        <button class="modal-close" type="button" data-close-dialog="materialDialog" aria-label="Закрыть">
+          <svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg>
+        </button>
+      </header>
+      <form id="materialForm" novalidate>
+        <input type="hidden" id="materialId">
+        <div class="form-grid">
+          <div class="field field--date">
+            <label for="materialDate">Дата поступления</label>
+            <input type="date" id="materialDate" name="date" required>
+          </div>
+          <div class="field field--unit">
+            <label for="materialUnit">Единица</label>
+            <input type="text" id="materialUnit" name="unit" list="unitOptions" maxlength="20" placeholder="шт" autocomplete="off" required>
+            <datalist id="unitOptions">
+              <option value="шт"></option>
+              <option value="м"></option>
+              <option value="м²"></option>
+              <option value="м³"></option>
+              <option value="кг"></option>
+              <option value="т"></option>
+              <option value="компл."></option>
+              <option value="упак."></option>
+              <option value="рул."></option>
+              <option value="меш."></option>
+              <option value="л"></option>
+              <option value="лист"></option>
+            </datalist>
+          </div>
+          <div class="field field--qty">
+            <label for="materialQty">Количество</label>
+            <input type="text" id="materialQty" name="qty" inputmode="decimal" placeholder="0,000" autocomplete="off" required>
+          </div>
+          <div class="field field--name">
+            <label for="materialName">Наименование материала</label>
+            <input type="text" id="materialName" name="name" maxlength="200" placeholder="Например, профиль ПН-2 50×50" autocomplete="off" required>
+          </div>
+          <div class="field field--note">
+            <label for="materialNote">Примечание <span>необязательно</span></label>
+            <textarea id="materialNote" name="note" rows="3" maxlength="500" placeholder="Поставщик, номер накладной или другие детали"></textarea>
+          </div>
+        </div>
+        <div class="unit-quick" aria-label="Быстрый выбор единицы">
+          <span>Быстрый выбор:</span>
+          <button type="button" class="unit-chip" data-unit="шт">шт</button>
+          <button type="button" class="unit-chip" data-unit="м²">м²</button>
+          <button type="button" class="unit-chip" data-unit="м³">м³</button>
+          <button type="button" class="unit-chip" data-unit="кг">кг</button>
+          <button type="button" class="unit-chip" data-unit="т">т</button>
+          <button type="button" class="unit-chip" data-unit="компл.">компл.</button>
+        </div>
+        <div class="form-error" id="materialError" role="alert" hidden></div>
+        <details class="history" id="historyDetails" hidden>
+          <summary><span><svg class="icon" aria-hidden="true"><use href="#i-history"></use></svg>История изменений</span><span class="history-count" id="historyCount"></span></summary>
+          <ol class="history-list" id="historyList"></ol>
+        </details>
+        <footer class="modal-actions">
+          <button class="btn btn--ghost" type="button" data-close-dialog="materialDialog">Отмена</button>
+          <button class="btn btn--primary" type="submit" id="materialSubmit">Добавить в реестр</button>
+        </footer>
+      </form>
+    </div>
+  </dialog>
+
+  <dialog class="modal modal--narrow" id="archiveDialog" aria-labelledby="archiveTitle">
+    <div class="modal-panel">
+      <div class="archive-seal" aria-hidden="true"><svg class="icon"><use href="#i-archive"></use></svg></div>
+      <p class="eyebrow">Защищённое действие</p>
+      <h2 id="archiveTitle">Переместить в архив?</h2>
+      <p class="modal-subtitle">Позиция <strong id="archiveRecordName">—</strong> не будет удалена безвозвратно. Её можно вернуть из архива в любой момент.</p>
+      <div class="notice notice--safe">
+        <svg class="icon" aria-hidden="true"><use href="#i-shield"></use></svg>
+        <p>В ПРИЁМКЕ нет функции удаления. Для архивации подтвердите действие текущим паролем.</p>
+      </div>
+      <form id="archiveForm" novalidate>
+        <div class="field">
+          <label for="archivePassword">Пароль для подтверждения</label>
+          <div class="password-wrap">
+            <input type="password" id="archivePassword" autocomplete="current-password" required placeholder="Введите пароль">
+            <button class="password-toggle" type="button" aria-label="Показать пароль" data-password-toggle="archivePassword">
+              <svg class="icon" aria-hidden="true"><use href="#i-eye"></use></svg>
+            </button>
+          </div>
+        </div>
+        <div class="form-error" id="archiveError" role="alert" hidden></div>
+        <footer class="modal-actions">
+          <button class="btn btn--ghost" type="button" data-close-dialog="archiveDialog">Оставить в реестре</button>
+          <button class="btn btn--dark" type="submit" id="archiveSubmit">Переместить в архив</button>
+        </footer>
+      </form>
+    </div>
+  </dialog>
+
+  <dialog class="modal modal--settings" id="settingsDialog" aria-labelledby="settingsTitle">
+    <div class="modal-panel">
+      <header class="modal-head">
+        <div>
+          <p class="eyebrow">Аккаунт и данные</p>
+          <h2 id="settingsTitle">Настройки реестра</h2>
+        </div>
+        <button class="modal-close" type="button" data-close-dialog="settingsDialog" aria-label="Закрыть">
+          <svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg>
+        </button>
+      </header>
+
+      <div class="account-card">
+        <span class="avatar avatar--large" id="settingsAvatar">A</span>
+        <div>
+          <strong id="settingsUsername">admin</strong>
+          <span>Локальный аккаунт · данные зашифрованы</span>
+        </div>
+        <button class="icon-btn" type="button" id="settingsLockBtn" title="Заблокировать" aria-label="Заблокировать реестр">
+          <svg class="icon" aria-hidden="true"><use href="#i-lock"></use></svg>
+        </button>
+      </div>
+
+      <section class="settings-section">
+        <div class="section-title">
+          <h3>Резервная копия</h3>
+          <svg class="icon" aria-hidden="true"><use href="#i-database"></use></svg>
+        </div>
+        <p>Скачайте зашифрованный файл с реестром. Без пароля восстановить его невозможно.</p>
+        <div class="button-row">
+          <button class="btn btn--dark btn--small" type="button" id="backupBtn">
+            <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>
+            Скачать копию
+          </button>
+          <button class="btn btn--ghost btn--small" type="button" id="settingsExportBtn">
+            <svg class="icon" aria-hidden="true"><use href="#i-file"></use></svg>
+            Экспорт CSV
+          </button>
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <div class="section-title">
+          <h3>Сменить пароль</h3>
+          <svg class="icon" aria-hidden="true"><use href="#i-lock"></use></svg>
+        </div>
+        <p>Пароль шифрует весь реестр. После смены старые резервные копии открываются только старым паролем.</p>
+        <form id="passwordForm" novalidate>
+          <div class="field">
+            <label for="currentPassword">Текущий пароль</label>
+            <input type="password" id="currentPassword" autocomplete="current-password" required>
+          </div>
+          <div class="form-grid form-grid--compact">
+            <div class="field">
+              <label for="newPassword">Новый пароль</label>
+              <input type="password" id="newPassword" autocomplete="new-password" minlength="8" required>
+            </div>
+            <div class="field">
+              <label for="newPasswordConfirm">Повторите</label>
+              <input type="password" id="newPasswordConfirm" autocomplete="new-password" minlength="8" required>
+            </div>
+          </div>
+          <div class="form-error" id="passwordError" role="alert" hidden></div>
+          <button class="btn btn--primary btn--small" type="submit" id="passwordSubmit">Обновить пароль</button>
+        </form>
+      </section>
+
+      <section class="settings-section settings-section--safe">
+        <div class="section-title">
+          <h3>Защита от удаления</h3>
+          <svg class="icon" aria-hidden="true"><use href="#i-shield"></use></svg>
+        </div>
+        <p>В приложении нет функции безвозвратного удаления. Архивирование требует пароль и всегда доступно для отмены. История изменений хранится у каждой записи.</p>
+      </section>
+
+      <footer class="settings-foot">
+        <span>ПРИЁМКА · v1.0</span>
+        <button class="link-button" type="button" id="settingsLockLink">Заблокировать реестр</button>
+      </footer>
+    </div>
+  </dialog>
+
+  <div class="toast-region" id="toastRegion" role="status" aria-live="polite" aria-atomic="false"></div>
+
+  <noscript>
+    <div class="noscript">Для работы ПРИЁМКИ включите JavaScript в браузере.</div>
+  </noscript>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
