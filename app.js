@@ -188,6 +188,11 @@ const qtyFormatter = new Intl.NumberFormat('ru-RU', {
   maximumFractionDigits: 3,
   minimumFractionDigits: 0
 });
+const csvQtyFormatter = new Intl.NumberFormat('ru-RU', {
+  useGrouping: false,
+  maximumFractionDigits: 3,
+  minimumFractionDigits: 0
+});
 
 const UNIT_ORDER = ['шт', 'м', 'м²', 'м³', 'кг', 'т', 'компл.', 'упак.', 'рул.', 'меш.', 'л', 'лист'];
 const WEEK_DAYS = 7;
@@ -2232,7 +2237,7 @@ function exportCsv() {
       formatDate(record.date),
       record.name,
       record.unit,
-      formatQty(record.qty),
+      csvQtyFormatter.format(record.qty),
       record.note || '',
       record.archivedAt ? 'В архиве' : 'В реестре',
       record.archivedAt ? dateTimeFormatter.format(new Date(record.archivedAt)) : '',
