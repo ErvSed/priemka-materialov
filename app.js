@@ -11,8 +11,16 @@ const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const INACTIVITY_MS = 30 * 60 * 1000;
 const HISTORY_LIMIT = 40;
 const UNLOCK_MARKER = 'PRIEMKA_UNLOCK_V1';
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
 const MAX_BACKUP_BYTES = 10 * 1024 * 1024;
+const MAIL_REQUEST_TIMEOUT_MS = 25_000;
+const MAIL_STATUS_TIMEOUT_MS = 10_000;
+const MAIL_SYNC_DEBOUNCE_MS = 1_200;
+const MAIL_TOKEN_MIN_LENGTH = 24;
+const MAIL_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
+const MAIL_TIME_RE = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+const MAIL_FREQUENCIES = new Set(['daily', 'weekly', 'monthly']);
+const MAIL_RANGES = new Set(['today', '7', '30', 'all']);
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -115,6 +123,30 @@ const refs = {
   settingsLockLink: byId('settingsLockLink'),
   settingsExportBtn: byId('settingsExportBtn'),
   backupBtn: byId('backupBtn'),
+  mailSummary: byId('mailSummary'),
+  mailStatusDot: byId('mailStatusDot'),
+  mailStatusTitle: byId('mailStatusTitle'),
+  mailStatusText: byId('mailStatusText'),
+  mailConfigureBtn: byId('mailConfigureBtn'),
+  mailEditor: byId('mailEditor'),
+  mailForm: byId('mailForm'),
+  mailEnabled: byId('mailEnabled'),
+  mailEmail: byId('mailEmail'),
+  mailFrequency: byId('mailFrequency'),
+  mailWeekdayField: byId('mailWeekdayField'),
+  mailWeekday: byId('mailWeekday'),
+  mailMonthDayField: byId('mailMonthDayField'),
+  mailMonthDay: byId('mailMonthDay'),
+  mailTime: byId('mailTime'),
+  mailRange: byId('mailRange'),
+  mailTimezoneLabel: byId('mailTimezoneLabel'),
+  mailServerDetails: byId('mailServerDetails'),
+  mailServerUrl: byId('mailServerUrl'),
+  mailToken: byId('mailToken'),
+  mailError: byId('mailError'),
+  mailSaveBtn: byId('mailSaveBtn'),
+  mailTestBtn: byId('mailTestBtn'),
+  mailTestLabel: byId('mailTestLabel'),
   passwordForm: byId('passwordForm'),
   currentPassword: byId('currentPassword'),
   newPassword: byId('newPassword'),
@@ -139,15 +171,21 @@ const state = {
   editingId: null,
   sessionExpiresAt: null,
   lastActivityAt: 0,
-  inactivityTimer: null
+  inactivityTimer: null,
+  mail: null,
+  mailRemoteStatus: null,
+  mailSyncTimer: null
 };
 
 const busy = {
   auth: false,
   material: false,
   archive: false,
-  password: false
+  password: false,
+  mail: false
 };
+
+const mailAbortControllers = new Set();
 
 class AppError extends Error {
   constructor(message) {
@@ -300,6 +338,520 @@ function normalizeSearch(value) {
     .toLocaleLowerCase('ru-RU')
     .replace(/ё/g, 'е')
     .trim();
+}
+
+/* ---------- Mail settings ---------- */
+
+function getBrowserTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
+}
+
+function isValidTimeZoneName(timeZone) {
+  if (typeof timeZone !== 'string' || !timeZone) return false;
+  try {
+    new Intl.DateTimeFormat('ru-RU', { timeZone }).format(new Date());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function createDefaultMailSettings() {
+  return {
+    enabled: false,
+    email: '',
+    frequency: 'weekly',
+    weekday: 5,
+    dayOfMonth: 1,
+    time: '18:00',
+    timezone: getBrowserTimeZone(),
+    range: '7',
+    serverUrl: '',
+    token: '',
+    attachArchive: true
+  };
+}
+
+function isValidMailEmail(value) {
+  return typeof value === 'string' && value.length <= 254 && MAIL_EMAIL_RE.test(value);
+}
+
+function normalizeMailSettings(raw) {
+  const defaults = createDefaultMailSettings();
+  if (!raw || typeof raw !== 'object') {
+    return defaults;
+  }
+
+  const email = typeof raw.email === 'string' ? raw.email.trim().slice(0, 254) : '';
+  const frequency = MAIL_FREQUENCIES.has(raw.frequency) ? raw.frequency : defaults.frequency;
+  const weekdayValue = Number(raw.weekday);
+  const weekday = Number.isInteger(weekdayValue) && weekdayValue >= 1 && weekdayValue <= 7
+    ? weekdayValue
+    : defaults.weekday;
+  const dayValue = Number(raw.dayOfMonth);
+  const dayOfMonth = Number.isInteger(dayValue) && dayValue >= 1 && dayValue <= 28
+    ? dayValue
+    : defaults.dayOfMonth;
+  const time = typeof raw.time === 'string' && MAIL_TIME_RE.test(raw.time)
+    ? raw.time
+    : defaults.time;
+  const timezone = isValidTimeZoneName(raw.timezone) ? raw.timezone : defaults.timezone;
+  const range = MAIL_RANGES.has(String(raw.range)) ? String(raw.range) : defaults.range;
+  const serverUrl = typeof raw.serverUrl === 'string' ? raw.serverUrl.trim() : '';
+  const token = typeof raw.token === 'string' ? raw.token.trim() : '';
+
+  return {
+    enabled: raw.enabled === true,
+    email,
+    frequency,
+    weekday,
+    dayOfMonth,
+    time,
+    timezone,
+    range,
+    serverUrl,
+    token,
+    attachArchive: true
+  };
+}
+
+function mailConnectionConfigured(mail) {
+  return Boolean(
+    mail &&
+    typeof mail.serverUrl === 'string' &&
+    mail.serverUrl.length > 0 &&
+    typeof mail.token === 'string' &&
+    mail.token.length >= MAIL_TOKEN_MIN_LENGTH
+  );
+}
+
+function mailConfigurationReady(mail) {
+  return Boolean(
+    mail &&
+    mail.enabled &&
+    isValidMailEmail(mail.email) &&
+    MAIL_FREQUENCIES.has(mail.frequency) &&
+    MAIL_RANGES.has(String(mail.range)) &&
+    MAIL_TIME_RE.test(mail.time) &&
+    isValidTimeZoneName(mail.timezone) &&
+    (mail.frequency !== 'weekly' || (Number.isInteger(mail.weekday) && mail.weekday >= 1 && mail.weekday <= 7)) &&
+    (mail.frequency !== 'monthly' || (Number.isInteger(mail.dayOfMonth) && mail.dayOfMonth >= 1 && mail.dayOfMonth <= 28)) &&
+    mailConnectionConfigured(mail)
+  );
+}
+
+function formatMailRangeLabel(range) {
+  return {
+    today: 'за сегодня',
+    7: 'за последние 7 дней',
+    30: 'за последние 30 дней',
+    all: 'за всё время'
+  }[String(range)] || 'за выбранный период';
+}
+
+function normalizeMailServerUrl(value, { required = false } = {}) {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    if (required) {
+      throw new AppError('Укажите адрес почтового сервиса.');
+    }
+    return '';
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new AppError('Адрес почтового сервиса указан неверно.');
+  }
+
+  if (parsed.username || parsed.password) {
+    throw new AppError('В адресе сервиса не должно быть логина и пароля.');
+  }
+  if (parsed.search || parsed.hash) {
+    throw new AppError('Адрес почтового сервиса не должен содержать параметры или якорь.');
+  }
+  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && ['localhost', '127.0.0.1', '::1'].includes(parsed.hostname))) {
+    throw new AppError('Используйте HTTPS-адрес почтового сервиса. HTTP допускается только для localhost.');
+  }
+
+  const normalized = parsed.toString().replace(/\/+$/, '');
+  return normalized;
+}
+
+function updateMailFrequencyFields() {
+  const frequency = refs.mailFrequency.value;
+  refs.mailWeekdayField.hidden = frequency !== 'weekly';
+  refs.mailMonthDayField.hidden = frequency !== 'monthly';
+}
+
+function setMailStatus(stateName, title, text) {
+  if (!refs.mailSummary) return;
+  refs.mailSummary.dataset.state = stateName;
+  refs.mailStatusTitle.textContent = title;
+  refs.mailStatusText.textContent = text;
+  refs.mailStatusText.title = text;
+}
+
+function setMailEditorOpen(open) {
+  refs.mailEditor.hidden = !open;
+  refs.mailConfigureBtn.setAttribute('aria-expanded', String(open));
+  refs.mailConfigureBtn.textContent = open ? 'Свернуть' : 'Настроить';
+}
+
+function populateMailForm() {
+  const mail = normalizeMailSettings(state.mail);
+  refs.mailEnabled.checked = mail.enabled;
+  refs.mailEmail.value = mail.email;
+  refs.mailFrequency.value = mail.frequency;
+  refs.mailWeekday.value = String(mail.weekday);
+  refs.mailMonthDay.value = String(mail.dayOfMonth);
+  refs.mailTime.value = mail.time;
+  refs.mailRange.value = mail.range;
+  refs.mailServerUrl.value = mail.serverUrl;
+  refs.mailToken.value = mail.token;
+  refs.mailTimezoneLabel.textContent = `${mail.timezone}${mail.timezone === getBrowserTimeZone() ? ' · ваш часовой пояс' : ''}`;
+  refs.mailServerDetails.open = !mailConnectionConfigured(mail);
+  updateMailFrequencyFields();
+  setError(refs.mailError, '');
+}
+
+function applyLocalMailStatus() {
+  const mail = normalizeMailSettings(state.mail);
+  if (!mail.enabled) {
+    if (mail.email || mailConnectionConfigured(mail)) {
+      setMailStatus(
+        'disabled',
+        'Автоотправка выключена',
+        mail.email ? `Почта: ${mail.email}` : 'Настройки сохранены'
+      );
+    } else {
+      setMailStatus('off', 'Не настроено', 'Автоматические письма выключены');
+    }
+    return;
+  }
+
+  if (!mailConfigurationReady(mail)) {
+    setMailStatus('error', 'Не хватает настроек', 'Заполните адрес, расписание и данные сервера');
+    return;
+  }
+
+  setMailStatus(
+    'connected',
+    'Автоотправка включена',
+    `${describeMailSchedule(mail)} · ${mail.email}`
+  );
+}
+
+function describeMailSchedule(mail) {
+  const weekdays = {
+    1: 'каждый понедельник',
+    2: 'каждый вторник',
+    3: 'каждую среду',
+    4: 'каждый четверг',
+    5: 'каждую пятницу',
+    6: 'каждую субботу',
+    7: 'каждое воскресенье'
+  };
+  if (mail.frequency === 'daily') {
+    return `ежедневно в ${mail.time}`;
+  }
+  if (mail.frequency === 'weekly') {
+    return `${weekdays[mail.weekday] || 'еженедельно'} в ${mail.time}`;
+  }
+  return `${mail.dayOfMonth}-го числа каждого месяца в ${mail.time}`;
+}
+
+function applyRemoteMailStatus(status) {
+  state.mailRemoteStatus = status || null;
+  if (!status) {
+    applyLocalMailStatus();
+    return;
+  }
+
+  if (!status.enabled) {
+    setMailStatus(
+      'disabled',
+      'Автоотправка выключена',
+      status.email ? `Почта: ${status.email}` : 'На сервере расписание отключено'
+    );
+    return;
+  }
+
+  if (!status.smtpConfigured) {
+    setMailStatus(
+      'error',
+      'SMTP не настроен на сервере',
+      'Заполните SMTP-параметры в окружении почтового сервиса'
+    );
+    return;
+  }
+
+  if (status.lastError) {
+    setMailStatus('error', 'Ошибка отправки на сервере', status.lastError);
+    return;
+  }
+
+  const next = status.nextRunLocal
+    ? `Следующее письмо: ${status.nextRunLocal}`
+    : 'Расписание ожидает данных из приложения';
+  setMailStatus(
+    'connected',
+    'Автоотправка включена',
+    `${next} · ${status.email || ''}`.trim()
+  );
+}
+
+function stopMailActivity() {
+  if (state.mailSyncTimer) {
+    clearTimeout(state.mailSyncTimer);
+    state.mailSyncTimer = null;
+  }
+  for (const controller of mailAbortControllers) {
+    controller.abort();
+  }
+  mailAbortControllers.clear();
+}
+
+function readMailForm({ requireConnection = false } = {}) {
+  const enabled = refs.mailEnabled.checked;
+  const email = refs.mailEmail.value.trim();
+  const frequency = refs.mailFrequency.value;
+  const time = refs.mailTime.value;
+  const range = refs.mailRange.value;
+  const timezone = getBrowserTimeZone();
+  const serverUrl = normalizeMailServerUrl(refs.mailServerUrl.value, { required: enabled || requireConnection });
+  const token = refs.mailToken.value.trim();
+
+  if (enabled || requireConnection) {
+    if (!email) {
+      throw new AppError('Введите email получателя.');
+    }
+    if (!isValidMailEmail(email)) {
+      throw new AppError('Email получателя указан неверно.');
+    }
+    if (!time || !MAIL_TIME_RE.test(time)) {
+      throw new AppError('Укажите время отправки.');
+    }
+    if (!MAIL_FREQUENCIES.has(frequency)) {
+      throw new AppError('Выберите частоту отправки.');
+    }
+    if (!MAIL_RANGES.has(String(range))) {
+      throw new AppError('Выберите период данных.');
+    }
+    if (!token || token.length < MAIL_TOKEN_MIN_LENGTH) {
+      throw new AppError(`Ключ доступа должен содержать не менее ${MAIL_TOKEN_MIN_LENGTH} символов.`);
+    }
+    if (!serverUrl) {
+      throw new AppError('Укажите адрес почтового сервиса.');
+    }
+  } else {
+    if (email && !isValidMailEmail(email)) {
+      throw new AppError('Email получателя указан неверно.');
+    }
+    if (time && !MAIL_TIME_RE.test(time)) {
+      throw new AppError('Укажите корректное время отправки.');
+    }
+    if (token && token.length < MAIL_TOKEN_MIN_LENGTH) {
+      throw new AppError(`Ключ доступа должен содержать не менее ${MAIL_TOKEN_MIN_LENGTH} символов.`);
+    }
+  }
+
+  const weekday = Number(refs.mailWeekday.value);
+  const dayOfMonth = Number(refs.mailMonthDay.value);
+
+  if (frequency === 'weekly' && (!Number.isInteger(weekday) || weekday < 1 || weekday > 7)) {
+    throw new AppError('Выберите день недели.');
+  }
+  if (frequency === 'monthly' && (!Number.isInteger(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 28)) {
+    throw new AppError('Выберите день месяца с 1 по 28.');
+  }
+
+  return {
+    enabled,
+    email,
+    frequency,
+    weekday,
+    dayOfMonth,
+    time: time || '18:00',
+    timezone,
+    range,
+    serverUrl,
+    token,
+    attachArchive: true
+  };
+}
+
+function toBackendMailConfig(mail) {
+  return {
+    enabled: Boolean(mail.enabled),
+    email: mail.email,
+    frequency: mail.frequency,
+    time: mail.time,
+    timezone: mail.timezone,
+    weekday: mail.frequency === 'weekly' ? mail.weekday : null,
+    dayOfMonth: mail.frequency === 'monthly' ? mail.dayOfMonth : null,
+    range: mail.range,
+    attachArchive: true
+  };
+}
+
+function buildMailSnapshot() {
+  const active = state.records
+    .filter((record) => !record.archivedAt)
+    .map((record) => ({
+      date: record.date,
+      name: record.name,
+      unit: record.unit,
+      qty: record.qty,
+      note: record.note || ''
+    }));
+
+  return {
+    username: state.username,
+    generatedAt: new Date().toISOString(),
+    archivedCount: state.records.filter((record) => record.archivedAt).length,
+    records: active
+  };
+}
+
+function buildMailSyncBody(mail, { enabled = mail.enabled } = {}) {
+  return {
+    config: toBackendMailConfig({ ...mail, enabled }),
+    snapshot: buildMailSnapshot(),
+    archive: makeBackupEnvelope(state.account)
+  };
+}
+
+async function mailApiRequest(pathname, { method = 'GET', body = null, mail, timeout = MAIL_REQUEST_TIMEOUT_MS } = {}) {
+  const config = mail || state.mail;
+  const serverUrl = normalizeMailServerUrl(config?.serverUrl);
+  if (!serverUrl) {
+    throw new AppError('Почтовый сервис не подключён. Укажите адрес сервера.');
+  }
+  if (!config?.token) {
+    throw new AppError('Не указан ключ доступа к почтовому сервису.');
+  }
+
+  const controller = new AbortController();
+  mailAbortControllers.add(controller);
+  const timeoutId = window.setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const response = await fetch(`${serverUrl}${pathname}`, {
+      method,
+      cache: 'no-store',
+      credentials: 'omit',
+      headers: {
+        Authorization: `Bearer ${config.token}`,
+        ...(body ? { 'Content-Type': 'application/json' } : {})
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal
+    });
+
+    const text = await response.text();
+    let data = null;
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = null;
+      }
+    }
+
+    if (!response.ok) {
+      throw new AppError(data?.error || `Почтовый сервис ответил ошибкой ${response.status}.`);
+    }
+    if (!data || typeof data !== 'object') {
+      throw new AppError('Почтовый сервис вернул некорректный ответ.');
+    }
+    return data;
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    if (error.name === 'AbortError') {
+      throw new AppError('Почтовый сервис не ответил вовремя. Проверьте адрес и подключение.');
+    }
+    console.error(error);
+    throw new AppError('Не удалось связаться с почтовым сервисом. Проверьте адрес и CORS.');
+  } finally {
+    window.clearTimeout(timeoutId);
+    mailAbortControllers.delete(controller);
+  }
+}
+
+async function syncMailSchedule(mail = state.mail) {
+  if (!mailConfigurationReady(mail)) {
+    throw new AppError('Настройки почты заполнены не полностью.');
+  }
+  const status = await mailApiRequest('/api/sync', {
+    method: 'POST',
+    body: buildMailSyncBody(mail),
+    mail
+  });
+  applyRemoteMailStatus(status);
+  return status;
+}
+
+async function disableMailSchedule(mail) {
+  if (!mailConnectionConfigured(mail)) return null;
+  const status = await mailApiRequest('/api/sync', {
+    method: 'POST',
+    body: {
+      config: toBackendMailConfig({ ...mail, enabled: false })
+    },
+    mail
+  });
+  applyRemoteMailStatus(status);
+  return status;
+}
+
+async function refreshMailStatus(mail = state.mail) {
+  if (!mailConnectionConfigured(mail)) {
+    applyLocalMailStatus();
+    return null;
+  }
+  try {
+    const status = await mailApiRequest('/api/status', {
+      method: 'GET',
+      mail,
+      timeout: MAIL_STATUS_TIMEOUT_MS
+    });
+    applyRemoteMailStatus(status);
+    return status;
+  } catch (error) {
+    setMailStatus('error', 'Нет связи с почтовым сервисом', error.message);
+    return null;
+  }
+}
+
+function queueMailSync(delay = MAIL_SYNC_DEBOUNCE_MS) {
+  if (state.mailSyncTimer) {
+    clearTimeout(state.mailSyncTimer);
+    state.mailSyncTimer = null;
+  }
+  if (!state.key || refs.appView.hidden || !state.mail) {
+    return;
+  }
+  if (!mailConfigurationReady(state.mail)) {
+    return;
+  }
+
+  state.mailSyncTimer = window.setTimeout(() => {
+    state.mailSyncTimer = null;
+    if (!state.key || refs.appView.hidden || !mailConfigurationReady(state.mail)) {
+      return;
+    }
+    setMailStatus('syncing', 'Синхронизация с почтовым сервисом', 'Передаём актуальные данные расписания');
+    syncMailSchedule(state.mail).catch((error) => {
+      console.warn('Mail background sync failed:', error);
+      setMailStatus('error', 'Данные не отправлены на сервер', error.message);
+    });
+  }, delay);
 }
 
 /* ---------- Base64 / crypto ---------- */
@@ -505,7 +1057,10 @@ function validateVaultPayload(payload) {
     }
     ids.add(record.id);
   }
-  return records;
+  return {
+    records,
+    mail: normalizeMailSettings(payload.mail)
+  };
 }
 
 function validateAccount(raw) {
@@ -639,7 +1194,8 @@ async function buildNewAccount(username, password) {
   const salt = bytesToBase64(randomBytes(16));
   const key = await deriveKey(password, salt, PBKDF2_ITERATIONS);
   const verifier = await encryptJson(key, { marker: UNLOCK_MARKER });
-  const vault = await encryptJson(key, { schema: 1, records: [] });
+  const mail = createDefaultMailSettings();
+  const vault = await encryptJson(key, { schema: 1, records: [], mail });
   const now = new Date().toISOString();
 
   return {
@@ -654,7 +1210,8 @@ async function buildNewAccount(username, password) {
       createdAt: now,
       updatedAt: now
     },
-    key
+    key,
+    mail
   };
 }
 
@@ -730,11 +1287,12 @@ async function tryResumeSession(account) {
       ['encrypt', 'decrypt']
     );
     const payload = await decryptJson(key, account.vault);
-    const records = validateVaultPayload(payload);
+    const { records, mail } = validateVaultPayload(payload);
     state.account = account;
     state.key = key;
     state.username = account.username;
     state.records = records;
+    state.mail = mail;
     state.sessionExpiresAt = session.expiresAt;
     enterApp();
     return true;
@@ -811,6 +1369,9 @@ function handleVisibilityChange() {
     return;
   }
   armInactivityTimer();
+  if (navigator.onLine && mailConfigurationReady(state.mail)) {
+    queueMailSync(1_500);
+  }
 }
 
 /* ---------- UI helpers ---------- */
@@ -1118,13 +1679,14 @@ async function handleAuthSubmit(event) {
       }
 
       setAuthBusy(true, 'Создаём реестр…');
-      const { account, key } = await buildNewAccount(username, password);
+      const { account, key, mail } = await buildNewAccount(username, password);
       writeAccount(account);
 
       state.account = account;
       state.username = account.username;
       state.key = key;
       state.records = [];
+      state.mail = mail;
       await saveSession(account, key);
       enterApp();
       showToast('Реестр создан. Можно добавлять первую поставку.');
@@ -1172,9 +1734,10 @@ async function handleAuthSubmit(event) {
       }
 
       let records;
+      let mail;
       try {
         const payload = await decryptJson(key, current.account.vault);
-        records = validateVaultPayload(payload);
+        ({ records, mail } = validateVaultPayload(payload));
       } catch (error) {
         console.error(error);
         throw new AppError('Данные реестра повреждены. Проверьте резервную копию.');
@@ -1183,6 +1746,7 @@ async function handleAuthSubmit(event) {
       state.key = key;
       state.username = current.account.username;
       state.records = records;
+      state.mail = mail;
       await saveSession(current.account, key);
       enterApp();
       showToast(`Реестр открыт. Добро пожаловать, ${current.account.username}.`);
@@ -1219,9 +1783,10 @@ async function handleAuthSubmit(event) {
       }
 
       let records;
+      let mail;
       try {
         const payload = await decryptJson(key, pending.account.vault);
-        records = validateVaultPayload(payload);
+        ({ records, mail } = validateVaultPayload(payload));
       } catch (error) {
         console.error(error);
         throw new AppError('Не удалось расшифровать резервную копию. Файл повреждён.');
@@ -1232,6 +1797,7 @@ async function handleAuthSubmit(event) {
       state.key = key;
       state.username = pending.account.username;
       state.records = records;
+      state.mail = mail;
       state.pendingRestore = null;
       await saveSession(pending.account, key);
       enterApp();
@@ -1296,6 +1862,7 @@ function enterApp() {
   clearPasswordVisibility();
   closeAllDialogs();
   clearToasts();
+  state.mail = normalizeMailSettings(state.mail);
   applyAccountLabels();
   state.view = 'active';
   state.query = '';
@@ -1304,6 +1871,7 @@ function enterApp() {
   refs.periodSelect.value = 'all';
   state.lastActivityAt = Date.now();
   renderAll();
+  applyLocalMailStatus();
   armInactivityTimer();
   document.title = `Реестр · ${state.username} — ПРИЁМКА`;
   window.scrollTo(0, 0);
@@ -1311,6 +1879,7 @@ function enterApp() {
   if (navigator.storage && typeof navigator.storage.persist === 'function') {
     navigator.storage.persist().catch(() => {});
   }
+  queueMailSync(2_500);
   hideBootScreen();
 }
 
@@ -1329,6 +1898,7 @@ function lockApp(message = 'Реестр заблокирован.') {
   }
 
   clearInactivityTimer();
+  stopMailActivity();
   closeAllDialogs();
   clearPasswordVisibility();
   clearSession();
@@ -1337,6 +1907,9 @@ function lockApp(message = 'Реестр заблокирован.') {
   state.key = null;
   state.records = [];
   state.username = '';
+  state.mail = null;
+  state.mailRemoteStatus = null;
+  state.mailSyncTimer = null;
   state.view = 'active';
   state.query = '';
   state.period = 'all';
@@ -1354,9 +1927,14 @@ function lockApp(message = 'Реестр заблокирован.') {
   refs.currentPassword.value = '';
   refs.newPassword.value = '';
   refs.newPasswordConfirm.value = '';
+  refs.mailToken.value = '';
+  refs.mailForm.reset();
+  setMailEditorOpen(false);
+  setMailStatus('off', 'Не настроено', 'Автоматические письма выключены');
   setError(refs.materialError, '');
   setError(refs.archiveError, '');
   setError(refs.passwordError, '');
+  setError(refs.mailError, '');
 
   const loaded = readAccount();
   state.account = loaded.status === 'ok' ? loaded.account : null;
@@ -1815,14 +2393,15 @@ function appendHistory(record, entry) {
   return history.slice(-HISTORY_LIMIT);
 }
 
-async function persistRecords(nextRecords) {
+async function persistRecords(nextRecords, options = {}) {
   if (!state.key || !state.account) {
     throw new AppError('Сессия заблокирована. Войдите в реестр снова.');
   }
 
+  const nextMail = normalizeMailSettings(options.mail || state.mail);
   let vault;
   try {
-    vault = await encryptJson(state.key, { schema: 1, records: nextRecords });
+    vault = await encryptJson(state.key, { schema: 1, records: nextRecords, mail: nextMail });
   } catch (error) {
     console.error(error);
     throw new AppError('Не удалось зашифровать данные. Попробуйте ещё раз.');
@@ -1836,6 +2415,11 @@ async function persistRecords(nextRecords) {
   writeAccount(updatedAccount);
   state.account = updatedAccount;
   state.records = nextRecords;
+  state.mail = nextMail;
+
+  if (options.scheduleMail !== false) {
+    queueMailSync();
+  }
 }
 
 async function handleMaterialSubmit(event) {
@@ -2094,10 +2678,19 @@ async function restoreRecord(recordId, expectedUpdatedAt = null) {
 
 function openSettings() {
   if (refs.appView.hidden) return;
+  state.mail = normalizeMailSettings(state.mail);
+  clearPasswordVisibility();
   applyAccountLabels();
   refs.passwordForm.reset();
   setError(refs.passwordError, '');
   refs.passwordSubmit.disabled = false;
+  populateMailForm();
+  setMailEditorOpen(false);
+  setError(refs.mailError, '');
+  applyLocalMailStatus();
+  if (mailConnectionConfigured(state.mail)) {
+    refreshMailStatus();
+  }
   if (!refs.settingsDialog.open) {
     refs.settingsDialog.showModal();
   }
@@ -2106,6 +2699,10 @@ function openSettings() {
 function closeSettingsAndReset() {
   refs.passwordForm.reset();
   setError(refs.passwordError, '');
+  setError(refs.mailError, '');
+  refs.mailToken.value = '';
+  clearPasswordVisibility();
+  setMailEditorOpen(false);
 }
 
 async function handlePasswordSubmit(event) {
@@ -2154,7 +2751,11 @@ async function handlePasswordSubmit(event) {
     }
 
     const verifier = await encryptJson(newKey, { marker: UNLOCK_MARKER });
-    const vault = await encryptJson(newKey, { schema: 1, records: state.records });
+    const vault = await encryptJson(newKey, {
+      schema: 1,
+      records: state.records,
+      mail: normalizeMailSettings(state.mail)
+    });
     const updatedAccount = {
       ...state.account,
       salt: newSalt,
@@ -2169,6 +2770,7 @@ async function handlePasswordSubmit(event) {
     state.key = newKey;
     await saveSession(updatedAccount, newKey);
     armInactivityTimer();
+    queueMailSync(300);
     refs.passwordForm.reset();
     showToast('Пароль обновлён. Новые резервные копии будут использовать его.');
   } catch (error) {
@@ -2183,7 +2785,157 @@ async function handlePasswordSubmit(event) {
   }
 }
 
-/* ---------- Downloads ---------- */
+/* ---------- Mail actions ---------- */
+
+function setMailFormBusy(isBusy, mode = 'save') {
+  busy.mail = isBusy;
+  refs.mailSaveBtn.disabled = isBusy;
+  refs.mailTestBtn.disabled = isBusy;
+  refs.mailSaveBtn.classList.toggle('is-busy', isBusy && mode === 'save');
+  refs.mailTestBtn.classList.toggle('is-busy', isBusy && mode === 'test');
+
+  if (isBusy) {
+    if (mode === 'save') {
+      refs.mailSaveBtn.textContent = 'Сохраняем…';
+    } else {
+      refs.mailTestLabel.textContent = 'Отправляем…';
+    }
+  } else {
+    refs.mailSaveBtn.textContent = 'Сохранить настройки';
+    refs.mailTestLabel.textContent = 'Отправить тест';
+  }
+}
+
+async function handleMailSave(event) {
+  event.preventDefault();
+  if (busy.mail) return;
+  setError(refs.mailError, '');
+
+  let nextMail;
+  try {
+    nextMail = {
+      ...normalizeMailSettings(state.mail),
+      ...readMailForm()
+    };
+  } catch (error) {
+    setError(refs.mailError, error instanceof AppError ? error.message : 'Проверьте настройки почты.');
+    return;
+  }
+
+  const previousMail = normalizeMailSettings(state.mail);
+  let locallySaved = false;
+
+  if (state.mailSyncTimer) {
+    clearTimeout(state.mailSyncTimer);
+    state.mailSyncTimer = null;
+  }
+
+  setMailFormBusy(true, 'save');
+  setMailStatus('syncing', 'Сохраняем настройки почты', 'Подключаемся к почтовому сервису');
+
+  try {
+    await persistRecords(state.records, { mail: nextMail, scheduleMail: false });
+    locallySaved = true;
+    state.mail = nextMail;
+
+    if (nextMail.enabled) {
+      const status = await syncMailSchedule(nextMail);
+      const next = status.nextRunLocal ? ` Следующее письмо: ${status.nextRunLocal}.` : '';
+      showToast(`Настройки почты сохранены.${next}`, { timeout: 7_000 });
+      return;
+    }
+
+    if (previousMail.enabled && mailConnectionConfigured(previousMail)) {
+      try {
+        await disableMailSchedule(previousMail);
+      } catch (error) {
+        throw new AppError(
+          `Настройки сохранены локально, но почтовый сервер не подтвердил отключение. Расписание на сервере может остаться активным. ${error.message}`
+        );
+      }
+    }
+
+    applyLocalMailStatus();
+    showToast('Автоотправка выключена. Настройки почты сохранены.');
+  } catch (error) {
+    console.error(error);
+    const message = error instanceof AppError
+      ? error.message
+      : 'Не удалось сохранить настройки почты. Попробуйте ещё раз.';
+    setError(refs.mailError, locallySaved ? `Настройки сохранены в приложении. ${message}` : message);
+    setMailStatus('error', 'Почтовый сервис не подключён', message);
+  } finally {
+    setMailFormBusy(false);
+  }
+}
+
+async function handleMailTest() {
+  if (busy.mail) return;
+  setError(refs.mailError, '');
+
+  let testMail;
+  try {
+    testMail = {
+      ...normalizeMailSettings(state.mail),
+      ...readMailForm({ requireConnection: true })
+    };
+  } catch (error) {
+    setError(refs.mailError, error instanceof AppError ? error.message : 'Проверьте настройки почты.');
+    if (!refs.mailEditor.hidden) {
+      refs.mailEmail.focus();
+    }
+    return;
+  }
+
+  if (state.mailSyncTimer) {
+    clearTimeout(state.mailSyncTimer);
+    state.mailSyncTimer = null;
+  }
+
+  setMailFormBusy(true, 'test');
+  setMailStatus('syncing', 'Проверяем отправку', 'Отправляем тестовое письмо через почтовый сервис');
+
+  try {
+    const result = await mailApiRequest('/api/test', {
+      method: 'POST',
+      body: {
+        config: toBackendMailConfig(testMail),
+        snapshot: buildMailSnapshot(),
+        archive: makeBackupEnvelope(state.account)
+      },
+      mail: testMail
+    });
+
+    if (!result.ok) {
+      throw new AppError('Почтовый сервис не подтвердил отправку письма.');
+    }
+
+    setMailStatus('connected', 'Проверка пройдена', `Тестовое письмо отправлено на ${testMail.email}`);
+    showToast(`Тестовое письмо отправлено на ${testMail.email}. Не забудьте сохранить настройки.`, {
+      timeout: 8_000
+    });
+  } catch (error) {
+    console.error(error);
+    const message = error instanceof AppError ? error.message : 'Не удалось отправить тестовое письмо.';
+    setError(refs.mailError, message);
+    setMailStatus('error', 'Тест не отправлен', message);
+  } finally {
+    setMailFormBusy(false);
+  }
+}
+
+function handleMailConfigureClick() {
+  const open = refs.mailEditor.hidden;
+  if (open) {
+    refs.mailTimezoneLabel.textContent = `${getBrowserTimeZone()} · ваш часовой пояс`;
+  }
+  setMailEditorOpen(open);
+  if (open) {
+    window.setTimeout(() => refs.mailEmail.focus(), 30);
+  }
+}
+
+
 
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -2367,6 +3119,12 @@ function bindEvents() {
   refs.passwordForm.addEventListener('submit', handlePasswordSubmit);
   refs.passwordForm.addEventListener('input', () => setError(refs.passwordError, ''));
   refs.settingsDialog.addEventListener('close', closeSettingsAndReset);
+  refs.mailConfigureBtn.addEventListener('click', handleMailConfigureClick);
+  refs.mailForm.addEventListener('submit', handleMailSave);
+  refs.mailForm.addEventListener('input', () => setError(refs.mailError, ''));
+  refs.mailFrequency.addEventListener('change', updateMailFrequencyFields);
+  refs.mailTestBtn.addEventListener('click', handleMailTest);
+  updateMailFrequencyFields();
 
   refs.lockBtn.addEventListener('click', () => lockApp('Реестр заблокирован.'));
   refs.settingsLockBtn.addEventListener('click', () => lockApp('Реестр заблокирован.'));
@@ -2395,6 +3153,11 @@ function bindEvents() {
   });
 
   document.addEventListener('visibilitychange', handleVisibilityChange);
+  window.addEventListener('online', () => {
+    if (mailConfigurationReady(state.mail)) {
+      queueMailSync(500);
+    }
+  });
 
   window.addEventListener('beforeunload', () => {
     clearInactivityTimer();

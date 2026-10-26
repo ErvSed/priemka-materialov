@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; font-src 'self'; script-src 'self'; connect-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; font-src 'self'; script-src 'self'; connect-src 'self' https: http://127.0.0.1:* http://localhost:*; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
   <meta name="referrer" content="no-referrer">
   <meta name="color-scheme" content="light">
   <meta name="theme-color" content="#16241d">
   <title>ПРИЁМКА — реестр материалов на объекте</title>
-  <meta name="description" content="Простой реестр поступления материалов на объект: дата, наименование, единица измерения, количество. Вход по паролю, история изменений и архив вместо удаления.">
+  <meta name="description" content="Реестр поступления материалов на объект: дата, наименование, единица измерения, количество. Вход по паролю, история изменений, архив вместо удаления и отчёты по расписанию.">
   <meta property="og:type" content="website">
   <meta property="og:title" content="ПРИЁМКА — материалы на объекте">
   <meta property="og:description" content="Фиксируйте поставки без лишней бюрократии. Вход по паролю. Удаление отключено.">
@@ -44,6 +44,8 @@
     <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5.5" rx="7.5" ry="3"/><path d="M4.5 5.5v6c0 1.66 3.36 3 7.5 3s7.5-1.34 7.5-3v-6M4.5 11.5v6c0 1.66 3.36 3 7.5 3s7.5-1.34 7.5-3v-6"/></symbol>
     <symbol id="i-logout" viewBox="0 0 24 24"><path d="M9 4H5.5A1.5 1.5 0 0 0 4 5.5v13A1.5 1.5 0 0 0 5.5 20H9M15 8l4 4-4 4M19 12H9"/></symbol>
     <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3.5h7l5 5V20a.5.5 0 0 1-.5.5h-11A.5.5 0 0 1 6 20V4a.5.5 0 0 1 .5-.5Z"/><path d="M13 3.5v5h5M9 13h6M9 16.5h6"/></symbol>
+    <symbol id="i-mail" viewBox="0 0 24 24"><rect x="3" y="5.5" width="18" height="13" rx="2"/><path d="m4 7 8 6 8-6"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="m21 3-7.3 18-3.5-7.2L3 10.3 21 3Z"/><path d="m10.2 13.8 4-4"/></symbol>
     <symbol id="i-cube" viewBox="0 0 24 24"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/></symbol>
     <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M7.5 3v4M16.5 3v4M3.5 9.5h17M8 13h.01M12 13h.01M16 13h.01M8 16.5h.01M12 16.5h.01"/></symbol>
     <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/></symbol>
@@ -149,8 +151,8 @@
         <p class="auth-switch" id="authSwitch" hidden>Уже есть доступ? <button class="link-button" type="button" data-auth-switch="login">Войти в реестр</button></p>
       </div>
       <div class="auth-panel-foot">
-        <span>Локальный реестр · v1.0</span>
-        <span>Без сервера и передачи данных</span>
+        <span>Локальный реестр · v1.1</span>
+        <span>Данные зашифрованы · почта по желанию</span>
       </div>
     </div>
   </section>
@@ -286,7 +288,7 @@
 
       <footer class="app-footer">
         <span>ПРИЁМКА · локальный реестр материалов</span>
-        <span>Данные зашифрованы и хранятся в этом браузере</span>
+        <span>Данные зашифрованы в браузере · почта по желанию</span>
       </footer>
     </main>
   </div>
@@ -433,6 +435,115 @@
         </div>
       </section>
 
+      <section class="settings-section settings-section--mail">
+        <div class="section-title">
+          <h3>Почта и отчёты</h3>
+          <svg class="icon" aria-hidden="true"><use href="#i-mail"></use></svg>
+        </div>
+        <p>Сервер пришлёт отчёт с материалами за выбранный период и зашифрованную резервную копию реестра.</p>
+        <div class="mail-summary" id="mailSummary">
+          <span class="mail-status-dot" id="mailStatusDot" aria-hidden="true"></span>
+          <div class="mail-summary-copy">
+            <strong id="mailStatusTitle">Не настроено</strong>
+            <span id="mailStatusText" aria-live="polite">Автоматические письма выключены</span>
+          </div>
+          <button class="btn btn--ghost btn--small mail-configure" type="button" id="mailConfigureBtn" aria-expanded="false" aria-controls="mailEditor">Настроить</button>
+        </div>
+
+        <div class="mail-editor" id="mailEditor" hidden>
+          <form id="mailForm" novalidate>
+            <label class="switch-row" for="mailEnabled">
+              <span class="switch">
+                <input type="checkbox" id="mailEnabled">
+                <span class="switch-track" aria-hidden="true"><span></span></span>
+              </span>
+              <span class="switch-copy">
+                <strong>Отправлять автоматически</strong>
+                <small>Расписание работает на почтовом сервисе, даже когда сайт закрыт.</small>
+              </span>
+            </label>
+
+            <div class="form-grid form-grid--mail">
+              <div class="field field--mail-email">
+                <label for="mailEmail">Email получателя</label>
+                <input type="email" id="mailEmail" autocomplete="email" maxlength="254" placeholder="name@company.ru">
+              </div>
+              <div class="field">
+                <label for="mailFrequency">Частота</label>
+                <select id="mailFrequency">
+                  <option value="daily">Ежедневно</option>
+                  <option value="weekly" selected>Еженедельно</option>
+                  <option value="monthly">Ежемесячно</option>
+                </select>
+              </div>
+              <div class="field" id="mailWeekdayField">
+                <label for="mailWeekday">День недели</label>
+                <select id="mailWeekday">
+                  <option value="1">Понедельник</option>
+                  <option value="2">Вторник</option>
+                  <option value="3">Среда</option>
+                  <option value="4">Четверг</option>
+                  <option value="5" selected>Пятница</option>
+                  <option value="6">Суббота</option>
+                  <option value="7">Воскресенье</option>
+                </select>
+              </div>
+              <div class="field" id="mailMonthDayField" hidden>
+                <label for="mailMonthDay">День месяца</label>
+                <input type="number" id="mailMonthDay" min="1" max="28" step="1" value="1">
+              </div>
+              <div class="field">
+                <label for="mailTime">Время отправки</label>
+                <input type="time" id="mailTime" step="60" value="18:00">
+              </div>
+              <div class="field">
+                <label for="mailRange">Данные за период</label>
+                <select id="mailRange">
+                  <option value="today">За сегодня</option>
+                  <option value="7" selected>За последние 7 дней</option>
+                  <option value="30">За последние 30 дней</option>
+                  <option value="all">За всё время</option>
+                </select>
+              </div>
+            </div>
+
+            <p class="mail-timezone">Часовой пояс расписания: <strong id="mailTimezoneLabel">—</strong></p>
+
+            <details class="mail-server" id="mailServerDetails">
+              <summary>Подключение к почтовому серверу</summary>
+              <p>Адрес и ключ выдаёт сервис из папки <code>mailer</code> после развёртывания. <a href="https://github.com/ErvSed/priemka-materialov/tree/main/mailer" target="_blank" rel="noopener">Инструкция</a>.</p>
+              <div class="form-grid form-grid--compact">
+                <div class="field">
+                  <label for="mailServerUrl">Адрес сервиса</label>
+                  <input type="url" id="mailServerUrl" autocomplete="off" spellcheck="false" placeholder="https://mail.example.com">
+                </div>
+                <div class="field">
+                  <label for="mailToken">Ключ доступа</label>
+                  <div class="password-wrap">
+                    <input type="password" id="mailToken" autocomplete="new-password" spellcheck="false" placeholder="Ключ из настроек сервера">
+                    <button class="password-toggle" type="button" aria-label="Показать пароль" data-password-toggle="mailToken">
+                      <svg class="icon" aria-hidden="true"><use href="#i-eye"></use></svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </details>
+
+            <div class="form-error" id="mailError" role="alert" hidden></div>
+
+            <div class="mail-actions">
+              <button class="btn btn--primary btn--small" type="submit" id="mailSaveBtn">Сохранить настройки</button>
+              <button class="btn btn--ghost btn--small" type="button" id="mailTestBtn">
+                <svg class="icon" aria-hidden="true"><use href="#i-send"></use></svg>
+                <span id="mailTestLabel">Отправить тест</span>
+              </button>
+            </div>
+
+            <p class="mail-privacy">Для автоматических писем снимок реестра передаётся на указанный почтовый сервис. SMTP-пароль хранится только на сервере, а зашифрованная копия в письме открывается вашим паролем.</p>
+          </form>
+        </div>
+      </section>
+
       <section class="settings-section">
         <div class="section-title">
           <h3>Сменить пароль</h3>
@@ -468,7 +579,7 @@
       </section>
 
       <footer class="settings-foot">
-        <span>ПРИЁМКА · v1.0</span>
+        <span>ПРИЁМКА · v1.1</span>
         <button class="link-button" type="button" id="settingsLockLink">Заблокировать реестр</button>
       </footer>
     </div>

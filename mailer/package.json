@@ -1,0 +1,24 @@
+{
+  "name": "priemka-mailer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "SMTP-сервис автоматических отчётов ПРИЁМКИ",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node --watch server.mjs",
+    "test": "node --test test/unit.test.mjs",
+    "test:integration": "node --test test/integration.test.mjs"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "nodemailer": "^6.9.16"
+  },
+  "devDependencies": {
+    "mailparser": "^3.7.2",
+    "smtp-server": "^3.13.6"
+  }
+}
