@@ -11,7 +11,7 @@ const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const INACTIVITY_MS = 30 * 60 * 1000;
 const HISTORY_LIMIT = 40;
 const UNLOCK_MARKER = 'PRIEMKA_UNLOCK_V1';
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 const MAX_BACKUP_BYTES = 10 * 1024 * 1024;
 const MAIL_REQUEST_TIMEOUT_MS = 25_000;
 const MAIL_STATUS_TIMEOUT_MS = 10_000;
@@ -21,6 +21,14 @@ const MAIL_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
 const MAIL_TIME_RE = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 const MAIL_FREQUENCIES = new Set(['daily', 'weekly', 'monthly']);
 const MAIL_RANGES = new Set(['today', '7', '30', 'all']);
+const GITHUB_API_BASE = 'https://api.github.com';
+const GIST_SYNC_FILE = 'priemka-sync.json';
+const SYNC_CODE_PREFIX = 'PRM1.';
+const SYNC_POLL_INTERVAL_MS = 20_000;
+const SYNC_DEBOUNCE_MS = 1_500;
+const SYNC_REQUEST_TIMEOUT_MS = 30_000;
+const SYNC_MAX_RECORDS = 5_000;
+const SYNC_MAX_REMOTE_BYTES = 5 * 1024 * 1024;
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -123,6 +131,24 @@ const refs = {
   settingsLockLink: byId('settingsLockLink'),
   settingsExportBtn: byId('settingsExportBtn'),
   backupBtn: byId('backupBtn'),
+  syncSummary: byId('syncSummary'),
+  syncStatusDot: byId('syncStatusDot'),
+  syncStatusTitle: byId('syncStatusTitle'),
+  syncStatusText: byId('syncStatusText'),
+  syncConfigureBtn: byId('syncConfigureBtn'),
+  syncEditor: byId('syncEditor'),
+  syncForm: byId('syncForm'),
+  syncToken: byId('syncToken'),
+  syncDisconnectedFields: byId('syncDisconnectedFields'),
+  syncConnectedFields: byId('syncConnectedFields'),
+  syncCode: byId('syncCode'),
+  syncInviteCode: byId('syncInviteCode'),
+  syncCopyCodeBtn: byId('syncCopyCodeBtn'),
+  syncCreateBtn: byId('syncCreateBtn'),
+  syncJoinBtn: byId('syncJoinBtn'),
+  syncNowBtn: byId('syncNowBtn'),
+  syncDisconnectBtn: byId('syncDisconnectBtn'),
+  syncError: byId('syncError'),
   mailSummary: byId('mailSummary'),
   mailStatusDot: byId('mailStatusDot'),
   mailStatusTitle: byId('mailStatusTitle'),
@@ -174,7 +200,13 @@ const state = {
   inactivityTimer: null,
   mail: null,
   mailRemoteStatus: null,
-  mailSyncTimer: null
+  mailSyncTimer: null,
+  sync: null,
+  syncLastAt: null,
+  syncPollTimer: null,
+  syncDebounceTimer: null,
+  syncInFlight: false,
+  syncQueued: false
 };
 
 const busy = {
@@ -182,10 +214,12 @@ const busy = {
   material: false,
   archive: false,
   password: false,
-  mail: false
+  mail: false,
+  sync: false
 };
 
 const mailAbortControllers = new Set();
+const syncAbortControllers = new Set();
 
 class AppError extends Error {
   constructor(message) {
@@ -854,7 +888,720 @@ function queueMailSync(delay = MAIL_SYNC_DEBOUNCE_MS) {
   }, delay);
 }
 
-/* ---------- Base64 / crypto ---------- */
+/* ---------- Shared registry sync ---------- */
+
+function createDefaultSyncSettings() {
+  return {
+    enabled: false,
+    token: '',
+    gistId: '',
+    key: ''
+  };
+}
+
+function isValidSyncKey(value) {
+  if (typeof value !== 'string') return false;
+  try {
+    return base64ToBytes(value).length === 32;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeSyncSettings(raw) {
+  const defaults = createDefaultSyncSettings();
+  if (!raw || typeof raw !== 'object') {
+    return defaults;
+  }
+
+  const token = typeof raw.token === 'string' ? raw.token.trim() : '';
+  const gistId = typeof raw.gistId === 'string' ? raw.gistId.trim() : '';
+  const key = typeof raw.key === 'string' ? raw.key.trim() : '';
+  const complete = Boolean(
+    token &&
+    /^[A-Za-z0-9]{8,80}$/u.test(gistId) &&
+    isValidSyncKey(key)
+  );
+
+  return {
+    enabled: raw.enabled === true && complete,
+    token,
+    gistId,
+    key: complete ? key : ''
+  };
+}
+
+function syncConfigurationReady(sync) {
+  return Boolean(
+    sync &&
+    sync.enabled &&
+    typeof sync.token === 'string' &&
+    sync.token.length > 0 &&
+    typeof sync.gistId === 'string' &&
+    /^[A-Za-z0-9]{8,80}$/u.test(sync.gistId) &&
+    isValidSyncKey(sync.key)
+  );
+}
+
+function encodeBase64Url(text) {
+  return bytesToBase64(encoder.encode(text))
+    .replaceAll('+', '-')
+    .replaceAll('/', '_')
+    .replace(/=+$/u, '');
+}
+
+function decodeBase64Url(value) {
+  const normalized = value.replaceAll('-', '+').replaceAll('_', '/');
+  const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
+  return decoder.decode(base64ToBytes(padded));
+}
+
+function makeSyncInviteCode(sync) {
+  return SYNC_CODE_PREFIX + encodeBase64Url(JSON.stringify({
+    v: 1,
+    gistId: sync.gistId,
+    key: sync.key
+  }));
+}
+
+function parseSyncInviteCode(rawCode) {
+  const code = String(rawCode || '').replace(/\s+/gu, '');
+  if (!code) {
+    throw new AppError('Вставьте код подключения с первого устройства.');
+  }
+  if (!code.startsWith(SYNC_CODE_PREFIX)) {
+    throw new AppError('Это не код подключения ПРИЁМКИ.');
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(decodeBase64Url(code.slice(SYNC_CODE_PREFIX.length)));
+  } catch {
+    throw new AppError('Код подключения повреждён.');
+  }
+
+  if (
+    !payload ||
+    payload.v !== 1 ||
+    typeof payload.gistId !== 'string' ||
+    !/^[A-Za-z0-9]{8,80}$/u.test(payload.gistId) ||
+    !isValidSyncKey(payload.key)
+  ) {
+    throw new AppError('Код подключения имеет неподдерживаемый формат.');
+  }
+
+  return {
+    gistId: payload.gistId,
+    key: payload.key
+  };
+}
+
+function normalizeHistoryForComparison(history) {
+  return [...(history || [])]
+    .map((entry) => ({
+      at: entry.at,
+      action: entry.action,
+      by: entry.by,
+      snapshot: entry.snapshot || null
+    }))
+    .sort((left, right) => {
+      const at = String(left.at).localeCompare(String(right.at));
+      if (at !== 0) return at;
+      return String(left.action).localeCompare(String(right.action));
+    });
+}
+
+function canonicalRecordBase(record) {
+  return JSON.stringify({
+    id: record.id,
+    date: record.date,
+    name: record.name,
+    unit: record.unit,
+    qty: record.qty,
+    note: record.note || '',
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    archivedAt: record.archivedAt || null
+  });
+}
+
+function canonicalRecords(records) {
+  return JSON.stringify(
+    [...records]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .map((record) => ({
+        ...record,
+        history: normalizeHistoryForComparison(record.history)
+      }))
+  );
+}
+
+function mergeRecordHistory(leftRecord, rightRecord) {
+  const merged = new Map();
+  [...(leftRecord.history || []), ...(rightRecord.history || [])].forEach((entry) => {
+    const key = `${entry.at}|${entry.action}|${entry.by}|${JSON.stringify(entry.snapshot || null)}`;
+    if (!merged.has(key)) {
+      merged.set(key, entry);
+    }
+  });
+
+  return [...merged.values()]
+    .sort((left, right) => String(left.at).localeCompare(String(right.at)))
+    .slice(-HISTORY_LIMIT);
+}
+
+function mergeRecordVersions(localRecord, remoteRecord) {
+  let primary;
+  if (localRecord.updatedAt !== remoteRecord.updatedAt) {
+    primary = localRecord.updatedAt > remoteRecord.updatedAt ? localRecord : remoteRecord;
+  } else {
+    primary = canonicalRecordBase(localRecord) >= canonicalRecordBase(remoteRecord)
+      ? localRecord
+      : remoteRecord;
+  }
+
+  return {
+    ...primary,
+    history: mergeRecordHistory(localRecord, remoteRecord)
+  };
+}
+
+/**
+ * Union merge. Records are matched only by their permanent id.
+ * Nothing is deleted: records that exist on one side are kept on both.
+ */
+function mergeRecordCollections(localRecords, remoteRecords) {
+  const merged = new Map();
+
+  localRecords.forEach((record) => merged.set(record.id, record));
+  remoteRecords.forEach((record) => {
+    const localRecord = merged.get(record.id);
+    if (!localRecord) {
+      merged.set(record.id, record);
+      return;
+    }
+    merged.set(record.id, mergeRecordVersions(localRecord, record));
+  });
+
+  return [...merged.values()].sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function setSyncStatus(stateName, title, text) {
+  if (!refs.syncSummary) return;
+  refs.syncSummary.dataset.state = stateName;
+  refs.syncStatusTitle.textContent = title;
+  refs.syncStatusText.textContent = text;
+  refs.syncStatusText.title = text;
+}
+
+function setSyncEditorOpen(open) {
+  refs.syncEditor.hidden = !open;
+  refs.syncConfigureBtn.setAttribute('aria-expanded', String(open));
+  refs.syncConfigureBtn.textContent = open ? 'Свернуть' : 'Настроить';
+}
+
+function renderSyncFormMode() {
+  const connected = Boolean(
+    state.sync &&
+    state.sync.token &&
+    state.sync.gistId &&
+    isValidSyncKey(state.sync.key)
+  );
+
+  refs.syncDisconnectedFields.hidden = connected;
+  refs.syncConnectedFields.hidden = !connected;
+  refs.syncInviteCode.textContent = connected ? makeSyncInviteCode(state.sync) : '—';
+  refs.syncCode.readOnly = false;
+  if (connected) {
+    refs.syncCode.value = '';
+  }
+}
+
+function populateSyncForm() {
+  state.sync = normalizeSyncSettings(state.sync);
+  refs.syncToken.value = state.sync.token || '';
+  refs.syncCode.value = '';
+  refs.syncError.hidden = true;
+  refs.syncError.textContent = '';
+  renderSyncFormMode();
+  applyLocalSyncStatus();
+}
+
+function applyLocalSyncStatus() {
+  if (!state.sync?.gistId || !isValidSyncKey(state.sync.key)) {
+    setSyncStatus('off', 'Не подключено', 'Каждое устройство хранит свою копию');
+    return;
+  }
+
+  if (!state.sync.enabled) {
+    setSyncStatus('disabled', 'Синхронизация выключена', 'Локальные записи сохранены');
+    return;
+  }
+
+  if (!syncConfigurationReady(state.sync)) {
+    setSyncStatus('error', 'Не хватает настроек', 'Заполните GitHub token и код подключения');
+    return;
+  }
+
+  if (state.syncLastAt) {
+    setSyncStatus(
+      'connected',
+      'Общая ведомость подключена',
+      `Последняя синхронизация: ${dateTimeFormatter.format(new Date(state.syncLastAt))}`
+    );
+  } else {
+    setSyncStatus('connected', 'Общая ведомость подключена', 'Ожидает первой синхронизации');
+  }
+}
+
+function applySyncError(error) {
+  const message = error instanceof AppError
+    ? error.message
+    : 'Не удалось синхронизировать данные. Проверьте подключение.';
+  setSyncStatus('error', 'Ошибка синхронизации', message);
+  return message;
+}
+
+function setSyncBusy(isBusy) {
+  busy.sync = isBusy;
+  [refs.syncCreateBtn, refs.syncJoinBtn, refs.syncNowBtn, refs.syncDisconnectBtn].forEach((button) => {
+    button.disabled = isBusy;
+    button.classList.toggle('is-busy', isBusy);
+    button.setAttribute('aria-busy', String(isBusy));
+  });
+}
+
+/* ---------- GitHub transport and sync engine ---------- */
+
+function syncTokenMissing(token) {
+  return typeof token !== 'string' || !token.trim();
+}
+
+function githubErrorMessage(status, response) {
+  const remaining = response.headers.get('x-ratelimit-remaining');
+  if (status === 401) {
+    return 'GitHub отклонил токен. Проверьте, что он не истёк и скопирован полностью.';
+  }
+  if (status === 403 && remaining === '0') {
+    return 'GitHub временно ограничил запросы. Повторите синхронизацию позже.';
+  }
+  if (status === 403) {
+    return 'GitHub запретил доступ. Токену нужно право gist.';
+  }
+  if (status === 404) {
+    return 'Хранилище не найдено. Проверьте код подключения и право токена gist.';
+  }
+  if (status === 422) {
+    return 'GitHub не принял данные. Возможно, общая ведомость превысила допустимый размер.';
+  }
+  if (status === 429) {
+    return 'GitHub временно ограничил частоту запросов. Повторите позже.';
+  }
+  return `GitHub ответил ошибкой ${status}.`;
+}
+
+async function githubApiRequest(pathname, { method = 'GET', token, body = null } = {}) {
+  if (syncTokenMissing(token)) {
+    throw new AppError('Укажите GitHub token с правом gist.');
+  }
+
+  const controller = new AbortController();
+  syncAbortControllers.add(controller);
+  const timeoutId = window.setTimeout(() => controller.abort(), SYNC_REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${GITHUB_API_BASE}${pathname}`, {
+      method,
+      cache: 'no-store',
+      credentials: 'omit',
+      headers: {
+        Authorization: `Bearer ${token.trim()}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        ...(body ? { 'Content-Type': 'application/json' } : {})
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal
+    });
+
+    let data = null;
+    const text = await response.text();
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = null;
+      }
+    }
+
+    if (!response.ok) {
+      throw new AppError(githubErrorMessage(response.status, response));
+    }
+    if (!data || typeof data !== 'object') {
+      throw new AppError('GitHub вернул некорректный ответ.');
+    }
+    return data;
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    if (error.name === 'AbortError') {
+      throw new AppError('GitHub не ответил вовремя. Проверьте интернет и повторите.');
+    }
+    console.error('GitHub request failed:', error);
+    throw new AppError('Не удалось связаться с GitHub. Проверьте интернет.');
+  } finally {
+    window.clearTimeout(timeoutId);
+    syncAbortControllers.delete(controller);
+  }
+}
+
+async function importSyncKey(base64Key) {
+  const bytes = base64ToBytes(base64Key);
+  if (bytes.length !== 32) {
+    throw new AppError('Ключ общей ведомости повреждён.');
+  }
+  return crypto.subtle.importKey(
+    'raw',
+    bytes,
+    { name: 'AES-GCM' },
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
+async function encryptSyncRecords(records, base64Key) {
+  if (records.length > SYNC_MAX_RECORDS) {
+    throw new AppError('Для общей ведомости слишком много записей. Данные остались только на устройстве.');
+  }
+  const key = await importSyncKey(base64Key);
+  const payload = {
+    app: 'priemka-sync',
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    records: [...records].sort((left, right) => left.id.localeCompare(right.id))
+  };
+  const encrypted = await encryptJson(key, payload);
+  return JSON.stringify({
+    format: 'priemka-sync-envelope',
+    version: 1,
+    iv: encrypted.iv,
+    data: encrypted.data
+  });
+}
+
+function validateRemoteSyncPayload(payload) {
+  if (!payload || typeof payload !== 'object' || payload.app !== 'priemka-sync' || payload.version !== 1) {
+    throw new AppError('Общая ведомость имеет неподдерживаемый формат.');
+  }
+  if (!Array.isArray(payload.records)) {
+    throw new AppError('В общей ведомости отсутствует список записей.');
+  }
+  if (payload.records.length > SYNC_MAX_RECORDS) {
+    throw new AppError('В общей ведомости слишком много записей.');
+  }
+
+  let records;
+  try {
+    records = payload.records.map(validateStoredRecord);
+  } catch (error) {
+    console.error(error);
+    throw new AppError('В общей ведомости есть повреждённая запись. Локальные данные не изменены.');
+  }
+
+  const ids = new Set();
+  for (const record of records) {
+    if (ids.has(record.id)) {
+      throw new AppError('В общей ведомости обнаружены повторяющиеся записи. Локальные данные не изменены.');
+    }
+    ids.add(record.id);
+  }
+
+  return {
+    records,
+    updatedAt: isValidTimestamp(payload.updatedAt) ? payload.updatedAt : null
+  };
+}
+
+async function decryptSyncRecords(content, base64Key) {
+  if (typeof content !== 'string' || !content) {
+    throw new AppError('В общем хранилище нет данных ПРИЁМКИ.');
+  }
+  if (encoder.encode(content).length > SYNC_MAX_REMOTE_BYTES) {
+    throw new AppError('Общая ведомость превысила допустимый размер.');
+  }
+
+  let envelope;
+  try {
+    envelope = JSON.parse(content);
+  } catch {
+    throw new AppError('Содержимое общего хранилища повреждено.');
+  }
+
+  if (
+    !envelope ||
+    envelope.format !== 'priemka-sync-envelope' ||
+    envelope.version !== 1 ||
+    typeof envelope.iv !== 'string' ||
+    typeof envelope.data !== 'string'
+  ) {
+    throw new AppError('Содержимое общего хранилища имеет неподдерживаемый формат.');
+  }
+
+  let key;
+  let payload;
+  try {
+    key = await importSyncKey(base64Key);
+  } catch {
+    throw new AppError('Код подключения повреждён.');
+  }
+
+  try {
+    payload = await decryptJson(key, { iv: envelope.iv, data: envelope.data });
+  } catch {
+    throw new AppError('Код подключения не подходит к этой общей ведомости.');
+  }
+
+  return validateRemoteSyncPayload(payload);
+}
+
+async function readGistSyncContent(gist) {
+  const file = gist?.files?.[GIST_SYNC_FILE];
+  if (!file) {
+    throw new AppError('В этом GitHub-хранилище нет файла ПРИЁМКИ.');
+  }
+
+  let content = file.content;
+  if (file.truncated || typeof content !== 'string') {
+    let rawUrl;
+    try {
+      rawUrl = new URL(file.raw_url);
+    } catch {
+      throw new AppError('GitHub не отдал содержимое общего хранилища.');
+    }
+    if (rawUrl.protocol !== 'https:' || rawUrl.hostname !== 'gist.githubusercontent.com') {
+      throw new AppError('GitHub вернул небезопасную ссылку на данные.');
+    }
+
+    const controller = new AbortController();
+    syncAbortControllers.add(controller);
+    const timeoutId = window.setTimeout(() => controller.abort(), SYNC_REQUEST_TIMEOUT_MS);
+    try {
+      const response = await fetch(rawUrl.toString(), {
+        cache: 'no-store',
+        credentials: 'omit',
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        throw new AppError(`Не удалось скачать общую ведомость (HTTP ${response.status}).`);
+      }
+      content = await response.text();
+    } catch (error) {
+      if (error instanceof AppError) throw error;
+      if (error.name === 'AbortError') {
+        throw new AppError('GitHub не отдал данные вовремя.');
+      }
+      console.error(error);
+      throw new AppError('Не удалось скачать общую ведомость из GitHub.');
+    } finally {
+      window.clearTimeout(timeoutId);
+      syncAbortControllers.delete(controller);
+    }
+  }
+
+  return content;
+}
+
+async function fetchRemoteSync(sync) {
+  const gist = await githubApiRequest(`/gists/${encodeURIComponent(sync.gistId)}`, {
+    token: sync.token
+  });
+  const content = await readGistSyncContent(gist);
+  return decryptSyncRecords(content, sync.key);
+}
+
+async function createRemoteSync(token, key, records) {
+  const content = await encryptSyncRecords(records, key);
+  const gist = await githubApiRequest('/gists', {
+    method: 'POST',
+    token,
+    body: {
+      description: 'ПРИЁМКА — общая ведомость (шифрование на устройстве)',
+      public: false,
+      files: {
+        [GIST_SYNC_FILE]: { content }
+      }
+    }
+  });
+
+  if (!gist.id || !/^[A-Za-z0-9]{8,80}$/u.test(gist.id)) {
+    throw new AppError('GitHub не вернул идентификатор общего хранилища.');
+  }
+  return gist;
+}
+
+async function writeRemoteSync(sync, records) {
+  const content = await encryptSyncRecords(records, sync.key);
+  await githubApiRequest(`/gists/${encodeURIComponent(sync.gistId)}`, {
+    method: 'PATCH',
+    token: sync.token,
+    body: {
+      files: {
+        [GIST_SYNC_FILE]: { content }
+      }
+    }
+  });
+}
+
+async function performGistSync() {
+  if (!state.key) {
+    throw new AppError('Сессия заблокирована.');
+  }
+  if (!syncConfigurationReady(state.sync)) {
+    throw new AppError('Синхронизация не настроена.');
+  }
+  if (state.syncInFlight) {
+    state.syncQueued = true;
+    return null;
+  }
+
+  state.syncInFlight = true;
+  setSyncStatus('syncing', 'Синхронизация…', 'Сверяем записи на устройствах');
+
+  try {
+    const remote = await fetchRemoteSync(state.sync);
+    const merged = mergeRecordCollections(state.records, remote.records);
+    const localChanged = canonicalRecords(merged) !== canonicalRecords(state.records);
+    const remoteChanged = canonicalRecords(merged) !== canonicalRecords(remote.records);
+
+    if (localChanged) {
+      await persistRecords(merged, { scheduleSync: false });
+      renderAll();
+    }
+
+    if (remoteChanged) {
+      await writeRemoteSync(state.sync, merged);
+    }
+
+    state.syncLastAt = new Date().toISOString();
+    setSyncStatus(
+      'connected',
+      'Общая ведомость подключена',
+      `Синхронизировано: ${dateTimeFormatter.format(new Date(state.syncLastAt))} · ${merged.length} ${recordWord(merged.length)}`
+    );
+    return { records: merged, localChanged, remoteChanged };
+  } catch (error) {
+    if (state.key) {
+      applySyncError(error);
+    }
+    throw error;
+  } finally {
+    state.syncInFlight = false;
+    if (state.syncQueued) {
+      state.syncQueued = false;
+      queueGistSync(250);
+    }
+  }
+}
+
+function stopSyncTimers() {
+  if (state.syncDebounceTimer) {
+    clearTimeout(state.syncDebounceTimer);
+    state.syncDebounceTimer = null;
+  }
+  if (state.syncPollTimer) {
+    clearInterval(state.syncPollTimer);
+    state.syncPollTimer = null;
+  }
+}
+
+function stopSyncActivity() {
+  stopSyncTimers();
+  for (const controller of syncAbortControllers) {
+    controller.abort();
+  }
+  syncAbortControllers.clear();
+  state.syncQueued = false;
+}
+
+function startSyncPolling() {
+  if (state.syncPollTimer) {
+    clearInterval(state.syncPollTimer);
+    state.syncPollTimer = null;
+  }
+  if (!syncConfigurationReady(state.sync)) {
+    return;
+  }
+
+  state.syncPollTimer = window.setInterval(() => {
+    if (
+      document.visibilityState !== 'visible' ||
+      !syncConfigurationReady(state.sync) ||
+      state.syncInFlight ||
+      !navigator.onLine
+    ) {
+      return;
+    }
+    performGistSync().catch((error) => {
+      console.warn('Background sync failed:', error.message);
+    });
+  }, SYNC_POLL_INTERVAL_MS);
+}
+
+function queueGistSync(delay = SYNC_DEBOUNCE_MS) {
+  if (state.syncDebounceTimer) {
+    clearTimeout(state.syncDebounceTimer);
+    state.syncDebounceTimer = null;
+  }
+  if (
+    !state.key ||
+    refs.appView.hidden ||
+    !syncConfigurationReady(state.sync) ||
+    !navigator.onLine
+  ) {
+    return;
+  }
+
+  state.syncDebounceTimer = window.setTimeout(() => {
+    state.syncDebounceTimer = null;
+    if (
+      !state.key ||
+      refs.appView.hidden ||
+      !syncConfigurationReady(state.sync) ||
+      !navigator.onLine
+    ) {
+      return;
+    }
+    performGistSync().catch((error) => {
+      console.warn('Queued sync failed:', error.message);
+    });
+  }, delay);
+}
+
+function beginSharedRegistrySync() {
+  if (!syncConfigurationReady(state.sync)) {
+    return;
+  }
+  startSyncPolling();
+  queueGistSync(700);
+}
+
+async function copyToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const temporary = document.createElement('textarea');
+    temporary.value = text;
+    temporary.setAttribute('readonly', 'readonly');
+    temporary.className = 'clipboard-buffer';
+    document.body.append(temporary);
+    temporary.select();
+    const copied = document.execCommand('copy');
+    temporary.remove();
+    return copied;
+  }
+}
+
+
 
 function bytesToBase64(value) {
   const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
@@ -1059,7 +1806,8 @@ function validateVaultPayload(payload) {
   }
   return {
     records,
-    mail: normalizeMailSettings(payload.mail)
+    mail: normalizeMailSettings(payload.mail),
+    sync: normalizeSyncSettings(payload.sync)
   };
 }
 
@@ -1195,7 +1943,8 @@ async function buildNewAccount(username, password) {
   const key = await deriveKey(password, salt, PBKDF2_ITERATIONS);
   const verifier = await encryptJson(key, { marker: UNLOCK_MARKER });
   const mail = createDefaultMailSettings();
-  const vault = await encryptJson(key, { schema: 1, records: [], mail });
+  const sync = createDefaultSyncSettings();
+  const vault = await encryptJson(key, { schema: 1, records: [], mail, sync });
   const now = new Date().toISOString();
 
   return {
@@ -1211,7 +1960,8 @@ async function buildNewAccount(username, password) {
       updatedAt: now
     },
     key,
-    mail
+    mail,
+    sync
   };
 }
 
@@ -1287,12 +2037,13 @@ async function tryResumeSession(account) {
       ['encrypt', 'decrypt']
     );
     const payload = await decryptJson(key, account.vault);
-    const { records, mail } = validateVaultPayload(payload);
+    const { records, mail, sync } = validateVaultPayload(payload);
     state.account = account;
     state.key = key;
     state.username = account.username;
     state.records = records;
     state.mail = mail;
+    state.sync = sync;
     state.sessionExpiresAt = session.expiresAt;
     enterApp();
     return true;
@@ -1371,6 +2122,9 @@ function handleVisibilityChange() {
   armInactivityTimer();
   if (navigator.onLine && mailConfigurationReady(state.mail)) {
     queueMailSync(1_500);
+  }
+  if (navigator.onLine && syncConfigurationReady(state.sync)) {
+    queueGistSync(800);
   }
 }
 
@@ -1679,7 +2433,7 @@ async function handleAuthSubmit(event) {
       }
 
       setAuthBusy(true, 'Создаём реестр…');
-      const { account, key, mail } = await buildNewAccount(username, password);
+      const { account, key, mail, sync } = await buildNewAccount(username, password);
       writeAccount(account);
 
       state.account = account;
@@ -1687,6 +2441,7 @@ async function handleAuthSubmit(event) {
       state.key = key;
       state.records = [];
       state.mail = mail;
+      state.sync = sync;
       await saveSession(account, key);
       enterApp();
       showToast('Реестр создан. Можно добавлять первую поставку.');
@@ -1735,9 +2490,10 @@ async function handleAuthSubmit(event) {
 
       let records;
       let mail;
+      let sync;
       try {
         const payload = await decryptJson(key, current.account.vault);
-        ({ records, mail } = validateVaultPayload(payload));
+        ({ records, mail, sync } = validateVaultPayload(payload));
       } catch (error) {
         console.error(error);
         throw new AppError('Данные реестра повреждены. Проверьте резервную копию.');
@@ -1747,6 +2503,7 @@ async function handleAuthSubmit(event) {
       state.username = current.account.username;
       state.records = records;
       state.mail = mail;
+      state.sync = sync;
       await saveSession(current.account, key);
       enterApp();
       showToast(`Реестр открыт. Добро пожаловать, ${current.account.username}.`);
@@ -1784,9 +2541,10 @@ async function handleAuthSubmit(event) {
 
       let records;
       let mail;
+      let sync;
       try {
         const payload = await decryptJson(key, pending.account.vault);
-        ({ records, mail } = validateVaultPayload(payload));
+        ({ records, mail, sync } = validateVaultPayload(payload));
       } catch (error) {
         console.error(error);
         throw new AppError('Не удалось расшифровать резервную копию. Файл повреждён.');
@@ -1798,6 +2556,7 @@ async function handleAuthSubmit(event) {
       state.username = pending.account.username;
       state.records = records;
       state.mail = mail;
+      state.sync = sync;
       state.pendingRestore = null;
       await saveSession(pending.account, key);
       enterApp();
@@ -1863,6 +2622,7 @@ function enterApp() {
   closeAllDialogs();
   clearToasts();
   state.mail = normalizeMailSettings(state.mail);
+  state.sync = normalizeSyncSettings(state.sync);
   applyAccountLabels();
   state.view = 'active';
   state.query = '';
@@ -1872,6 +2632,7 @@ function enterApp() {
   state.lastActivityAt = Date.now();
   renderAll();
   applyLocalMailStatus();
+  applyLocalSyncStatus();
   armInactivityTimer();
   document.title = `Реестр · ${state.username} — ПРИЁМКА`;
   window.scrollTo(0, 0);
@@ -1880,6 +2641,7 @@ function enterApp() {
     navigator.storage.persist().catch(() => {});
   }
   queueMailSync(2_500);
+  beginSharedRegistrySync();
   hideBootScreen();
 }
 
@@ -1899,6 +2661,7 @@ function lockApp(message = 'Реестр заблокирован.') {
 
   clearInactivityTimer();
   stopMailActivity();
+  stopSyncActivity();
   closeAllDialogs();
   clearPasswordVisibility();
   clearSession();
@@ -1910,6 +2673,12 @@ function lockApp(message = 'Реестр заблокирован.') {
   state.mail = null;
   state.mailRemoteStatus = null;
   state.mailSyncTimer = null;
+  state.sync = null;
+  state.syncLastAt = null;
+  state.syncPollTimer = null;
+  state.syncDebounceTimer = null;
+  state.syncInFlight = false;
+  state.syncQueued = false;
   state.view = 'active';
   state.query = '';
   state.period = 'all';
@@ -1929,12 +2698,18 @@ function lockApp(message = 'Реестр заблокирован.') {
   refs.newPasswordConfirm.value = '';
   refs.mailToken.value = '';
   refs.mailForm.reset();
+  refs.syncToken.value = '';
+  refs.syncCode.value = '';
+  refs.syncForm.reset();
   setMailEditorOpen(false);
+  setSyncEditorOpen(false);
   setMailStatus('off', 'Не настроено', 'Автоматические письма выключены');
+  setSyncStatus('off', 'Не подключено', 'Каждое устройство хранит свою копию');
   setError(refs.materialError, '');
   setError(refs.archiveError, '');
   setError(refs.passwordError, '');
   setError(refs.mailError, '');
+  setError(refs.syncError, '');
 
   const loaded = readAccount();
   state.account = loaded.status === 'ok' ? loaded.account : null;
@@ -2399,9 +3174,15 @@ async function persistRecords(nextRecords, options = {}) {
   }
 
   const nextMail = normalizeMailSettings(options.mail || state.mail);
+  const nextSync = normalizeSyncSettings(options.sync || state.sync);
   let vault;
   try {
-    vault = await encryptJson(state.key, { schema: 1, records: nextRecords, mail: nextMail });
+    vault = await encryptJson(state.key, {
+      schema: 1,
+      records: nextRecords,
+      mail: nextMail,
+      sync: nextSync
+    });
   } catch (error) {
     console.error(error);
     throw new AppError('Не удалось зашифровать данные. Попробуйте ещё раз.');
@@ -2416,9 +3197,13 @@ async function persistRecords(nextRecords, options = {}) {
   state.account = updatedAccount;
   state.records = nextRecords;
   state.mail = nextMail;
+  state.sync = nextSync;
 
   if (options.scheduleMail !== false) {
     queueMailSync();
+  }
+  if (options.scheduleSync !== false) {
+    queueGistSync();
   }
 }
 
@@ -2679,17 +3464,25 @@ async function restoreRecord(recordId, expectedUpdatedAt = null) {
 function openSettings() {
   if (refs.appView.hidden) return;
   state.mail = normalizeMailSettings(state.mail);
+  state.sync = normalizeSyncSettings(state.sync);
   clearPasswordVisibility();
   applyAccountLabels();
   refs.passwordForm.reset();
   setError(refs.passwordError, '');
   refs.passwordSubmit.disabled = false;
   populateMailForm();
+  populateSyncForm();
   setMailEditorOpen(false);
+  setSyncEditorOpen(false);
   setError(refs.mailError, '');
+  setError(refs.syncError, '');
   applyLocalMailStatus();
+  applyLocalSyncStatus();
   if (mailConnectionConfigured(state.mail)) {
     refreshMailStatus();
+  }
+  if (syncConfigurationReady(state.sync)) {
+    queueGistSync(0);
   }
   if (!refs.settingsDialog.open) {
     refs.settingsDialog.showModal();
@@ -2700,9 +3493,13 @@ function closeSettingsAndReset() {
   refs.passwordForm.reset();
   setError(refs.passwordError, '');
   setError(refs.mailError, '');
+  setError(refs.syncError, '');
   refs.mailToken.value = '';
+  refs.syncToken.value = '';
+  refs.syncCode.value = '';
   clearPasswordVisibility();
   setMailEditorOpen(false);
+  setSyncEditorOpen(false);
 }
 
 async function handlePasswordSubmit(event) {
@@ -2754,7 +3551,8 @@ async function handlePasswordSubmit(event) {
     const vault = await encryptJson(newKey, {
       schema: 1,
       records: state.records,
-      mail: normalizeMailSettings(state.mail)
+      mail: normalizeMailSettings(state.mail),
+      sync: normalizeSyncSettings(state.sync)
     });
     const updatedAccount = {
       ...state.account,
@@ -2932,6 +3730,262 @@ function handleMailConfigureClick() {
   setMailEditorOpen(open);
   if (open) {
     window.setTimeout(() => refs.mailEmail.focus(), 30);
+  }
+}
+
+/* ---------- Shared registry actions ---------- */
+
+function handleSyncConfigureClick() {
+  const open = refs.syncEditor.hidden;
+  setSyncEditorOpen(open);
+  if (open) {
+    renderSyncFormMode();
+    window.setTimeout(() => refs.syncToken.focus(), 30);
+  }
+}
+
+function readSyncToken() {
+  const token = refs.syncToken.value.trim();
+  if (!token) {
+    throw new AppError('Введите GitHub token с правом gist.');
+  }
+  return token;
+}
+
+function finishSyncConnection(nextSync, records, message) {
+  state.sync = normalizeSyncSettings(nextSync);
+  state.syncLastAt = new Date().toISOString();
+  refs.syncToken.value = nextSync.token;
+  refs.syncCode.value = '';
+  refs.syncInviteCode.textContent = makeSyncInviteCode(state.sync);
+  renderSyncFormMode();
+  setError(refs.syncError, '');
+  setSyncStatus(
+    'connected',
+    'Общая ведомость подключена',
+    'Синхронизация запускается автоматически'
+  );
+  startSyncPolling();
+  queueGistSync(500);
+  if (message) {
+    showToast(message, { timeout: 8_000 });
+  }
+}
+
+async function handleSyncCreate() {
+  if (busy.sync) return;
+  setError(refs.syncError, '');
+  let token;
+  try {
+    token = readSyncToken();
+  } catch (error) {
+    setError(refs.syncError, error.message);
+    return;
+  }
+
+  const confirmed = window.confirm(
+    'Создать общую ведомость из текущих записей? Они будут зашифрованы и загружены в приватное GitHub-хранилище. Локальная база и её пароль не изменятся.'
+  );
+  if (!confirmed) return;
+
+  setSyncBusy(true);
+  setSyncStatus('syncing', 'Создаём общую ведомость', 'Загружаем зашифрованный снимок в GitHub');
+  try {
+    const key = bytesToBase64(randomBytes(32));
+    const gist = await createRemoteSync(token, key, state.records);
+    const nextSync = {
+      enabled: true,
+      token,
+      gistId: gist.id,
+      key
+    };
+    await persistRecords(state.records, {
+      sync: nextSync,
+      scheduleSync: false,
+      scheduleMail: false
+    });
+    finishSyncConnection(
+      nextSync,
+      state.records,
+      'Общая ведомость создана. Скопируйте код для второго устройства.'
+    );
+  } catch (error) {
+    console.error(error);
+    const message = error instanceof AppError ? error.message : 'Не удалось создать общую ведомость.';
+    setError(refs.syncError, message);
+    applySyncError(error);
+  } finally {
+    setSyncBusy(false);
+  }
+}
+
+async function handleSyncJoin() {
+  if (busy.sync) return;
+  setError(refs.syncError, '');
+
+  let token;
+  let invite;
+  try {
+    token = readSyncToken();
+    invite = parseSyncInviteCode(refs.syncCode.value);
+  } catch (error) {
+    setError(refs.syncError, error instanceof AppError ? error.message : 'Проверьте код подключения.');
+    return;
+  }
+
+  setSyncBusy(true);
+  setSyncStatus('syncing', 'Подключаемся к общей ведомости', 'Читаем и объединяем записи');
+  let joined = false;
+  let remoteWriteError = null;
+
+  try {
+    const remote = await fetchRemoteSync({
+      enabled: true,
+      token,
+      gistId: invite.gistId,
+      key: invite.key
+    });
+    const merged = mergeRecordCollections(state.records, remote.records);
+    const needsRemoteUpdate = canonicalRecords(merged) !== canonicalRecords(remote.records);
+    const nextSync = {
+      enabled: true,
+      token,
+      gistId: invite.gistId,
+      key: invite.key
+    };
+
+    await persistRecords(merged, {
+      sync: nextSync,
+      scheduleSync: false
+    });
+    joined = true;
+    renderAll();
+
+    if (needsRemoteUpdate) {
+      try {
+        await writeRemoteSync(nextSync, merged);
+      } catch (error) {
+        console.error(error);
+        remoteWriteError = `Локальные записи объединены, но GitHub не принял обновление: ${error.message}`;
+      }
+    }
+
+    finishSyncConnection(
+      nextSync,
+      merged,
+      `Подключено. В общей ведомости ${merged.length} ${recordWord(merged.length)}.`
+    );
+
+    if (remoteWriteError) {
+      setError(refs.syncError, remoteWriteError);
+      setSyncStatus('error', 'Записи объединены, но GitHub недоступен', remoteWriteError);
+    }
+  } catch (error) {
+    console.error(error);
+    const message = error instanceof AppError
+      ? error.message
+      : 'Не удалось подключиться к общей ведомости.';
+    setError(refs.syncError, message);
+    if (!joined) {
+      applySyncError(error);
+    } else {
+      setSyncStatus('error', 'Синхронизация подключена с ошибкой', message);
+      startSyncPolling();
+    }
+  } finally {
+    setSyncBusy(false);
+  }
+}
+
+async function handleSyncNow() {
+  if (busy.sync) return;
+  setError(refs.syncError, '');
+  if (state.syncInFlight) {
+    setError(refs.syncError, 'Синхронизация уже выполняется. Дождитесь завершения.');
+    return;
+  }
+
+  setSyncBusy(true);
+  try {
+    const token = readSyncToken();
+    if (!state.sync?.gistId || !isValidSyncKey(state.sync.key)) {
+      throw new AppError('Сначала создайте или подключите общую ведомость.');
+    }
+    if (token !== state.sync.token) {
+      await persistRecords(state.records, {
+        sync: { ...state.sync, token },
+        scheduleSync: false,
+        scheduleMail: false
+      });
+    }
+
+    const result = await performGistSync();
+    if (!result) {
+      setError(refs.syncError, 'Синхронизация уже выполняется. Повторите чуть позже.');
+      return;
+    }
+    if (result.localChanged) {
+      showToast('Получены новые записи из общей ведомости.');
+    } else {
+      showToast('Общая ведомость синхронизирована.');
+    }
+  } catch (error) {
+    const message = error instanceof AppError ? error.message : 'Проверьте GitHub token.';
+    setError(refs.syncError, message);
+    if (error instanceof AppError && !error.message.includes('token')) {
+      applySyncError(error);
+    }
+  } finally {
+    setSyncBusy(false);
+  }
+}
+
+async function handleSyncDisconnect() {
+  if (busy.sync) return;
+  const confirmed = window.confirm(
+    'Отключить синхронизацию на этом устройстве? Локальные записи и данные на GitHub не будут удалены. Для повторного подключения понадобятся код и GitHub token.'
+  );
+  if (!confirmed) return;
+
+  setSyncBusy(true);
+  setError(refs.syncError, '');
+  try {
+    stopSyncActivity();
+    await persistRecords(state.records, {
+      sync: createDefaultSyncSettings(),
+      scheduleSync: false,
+      scheduleMail: false
+    });
+    state.sync = createDefaultSyncSettings();
+    state.syncLastAt = null;
+    refs.syncToken.value = '';
+    refs.syncCode.value = '';
+    refs.syncInviteCode.textContent = '—';
+    renderSyncFormMode();
+    setSyncStatus('off', 'Не подключено', 'Синхронизация выключена, локальные записи сохранены');
+    showToast('Синхронизация отключена. Локальные записи и данные на GitHub сохранены.');
+  } catch (error) {
+    console.error(error);
+    setError(
+      refs.syncError,
+      error instanceof AppError ? error.message : 'Не удалось отключить синхронизацию.'
+    );
+    startSyncPolling();
+  } finally {
+    setSyncBusy(false);
+  }
+}
+
+async function handleSyncCopyCode() {
+  if (!state.sync?.gistId || !isValidSyncKey(state.sync.key)) {
+    showToast('Сначала подключите общую ведомость.', { type: 'error' });
+    return;
+  }
+  const copied = await copyToClipboard(makeSyncInviteCode(state.sync));
+  if (copied) {
+    showToast('Код подключения скопирован. Передайте его на второе устройство.');
+  } else {
+    setError(refs.syncError, 'Не удалось скопировать код. Выделите его вручную.');
   }
 }
 
@@ -3126,6 +4180,15 @@ function bindEvents() {
   refs.mailTestBtn.addEventListener('click', handleMailTest);
   updateMailFrequencyFields();
 
+  refs.syncConfigureBtn.addEventListener('click', handleSyncConfigureClick);
+  refs.syncForm.addEventListener('submit', (event) => event.preventDefault());
+  refs.syncForm.addEventListener('input', () => setError(refs.syncError, ''));
+  refs.syncCreateBtn.addEventListener('click', handleSyncCreate);
+  refs.syncJoinBtn.addEventListener('click', handleSyncJoin);
+  refs.syncNowBtn.addEventListener('click', handleSyncNow);
+  refs.syncDisconnectBtn.addEventListener('click', handleSyncDisconnect);
+  refs.syncCopyCodeBtn.addEventListener('click', handleSyncCopyCode);
+
   refs.lockBtn.addEventListener('click', () => lockApp('Реестр заблокирован.'));
   refs.settingsLockBtn.addEventListener('click', () => lockApp('Реестр заблокирован.'));
   refs.settingsLockLink.addEventListener('click', () => lockApp('Реестр заблокирован.'));
@@ -3156,6 +4219,9 @@ function bindEvents() {
   window.addEventListener('online', () => {
     if (mailConfigurationReady(state.mail)) {
       queueMailSync(500);
+    }
+    if (syncConfigurationReady(state.sync)) {
+      queueGistSync(500);
     }
   });
 
