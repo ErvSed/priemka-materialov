@@ -2618,8 +2618,14 @@ svg {
   color: var(--green);
 }
 
+#syncForm {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
 .sync-hint {
-  margin-top: 4px;
+  margin-top: 0;
   color: var(--muted);
   font-size: 9.5px;
   line-height: 1.6;
