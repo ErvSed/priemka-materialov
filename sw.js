@@ -1,7 +1,7 @@
 /* ПРИЁМКА — offline application shell. */
 'use strict';
 
-const CACHE_NAME = 'priemka-shell-v1.2.1';
+const CACHE_NAME = 'priemka-shell-v1.3.0';
 const APP_SHELL = [
   './',
   './index.html',

@@ -1,0 +1,39 @@
+[Unit]
+Description=ПРИЁМКА — central shared registry sync API
+Documentation=https://github.com/ErvSed/priemka-materialov
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=priemka
+Group=priemka
+WorkingDirectory=/opt/priemka
+EnvironmentFile=/opt/priemka/priemka.env
+Environment=PYTHONUNBUFFERED=1
+Environment=TZ=Europe/Moscow
+ExecStart=/usr/bin/python3 /opt/priemka/priemka_sync.py
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/priemka/data
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryMax=256M
+TasksMax=64
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

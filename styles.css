@@ -2624,6 +2624,93 @@ svg {
   gap: 13px;
 }
 
+.sync-server-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.sync-server-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sync-server-head div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sync-server-head strong {
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.sync-server-head span:not(.sync-badge) {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.sync-badge {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  color: var(--green);
+  border: 1px solid color-mix(in srgb, var(--green) 24%, var(--line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--green) 8%, transparent);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sync-gist-details {
+  padding-top: 1px;
+  border-top: 1px dashed var(--line);
+}
+
+.sync-gist-details summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.sync-gist-details[open] summary {
+  margin-bottom: 11px;
+}
+
+.sync-gist-body,
+#syncDisconnectedFields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+#syncServerCode {
+  min-height: 62px;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+#syncConnectedTarget {
+  padding: 0 1px;
+  margin-bottom: -2px;
+  color: var(--muted-2);
+  font-size: 9px;
+  overflow-wrap: anywhere;
+}
+
 .sync-hint {
   margin-top: 0;
   color: var(--muted);

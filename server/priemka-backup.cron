@@ -1,0 +1,1 @@
+17 3 * * * priemka /usr/bin/python3 /opt/priemka/backup.py >/dev/null 2>&1
