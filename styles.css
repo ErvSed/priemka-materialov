@@ -3015,6 +3015,10 @@ svg {
   white-space: nowrap;
 }
 
+.duplicate-summary[hidden] {
+  display: none;
+}
+
 .ledger-table tbody tr.is-duplicate {
   background: #fdf6e6;
   box-shadow: inset 3px 0 0 #d6a33e;
