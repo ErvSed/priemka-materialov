@@ -8,7 +8,7 @@
   <meta name="color-scheme" content="light">
   <meta name="theme-color" content="#16241d">
   <title>ПРИЁМКА — реестр материалов на объекте</title>
-  <meta name="description" content="Реестр поступления материалов на объект: дата, наименование, единица измерения, количество. Вход по паролю, история изменений, архив вместо удаления, общая ведомость на нескольких устройствах и отчёты по расписанию.">
+  <meta name="description" content="Реестр поступления материалов на объект: дата, наименование, единица измерения, количество. Вход по паролю, история изменений, архив вместо удаления, общая ведомость, импорт с контролем дублей и отчёты по расписанию.">
   <meta property="og:type" content="website">
   <meta property="og:title" content="ПРИЁМКА — материалы на объекте">
   <meta property="og:description" content="Фиксируйте поставки без лишней бюрократии. Вход по паролю. Удаление отключено.">
@@ -30,6 +30,7 @@
     <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.06.06-2.78 2.78-.06-.06a1.8 1.8 0 0 0-1.98-.36 1.8 1.8 0 0 0-1.1 1.65V21H9.9v-.09A1.8 1.8 0 0 0 8.8 19.3a1.8 1.8 0 0 0-1.98.36l-.06.06-2.78-2.78.06-.06A1.8 1.8 0 0 0 4.4 15a1.8 1.8 0 0 0-1.65-1.1H3V9.9h.09A1.8 1.8 0 0 0 4.7 8.8a1.8 1.8 0 0 0-.36-1.98l-.06-.06 2.78-2.78.06.06A1.8 1.8 0 0 0 9 4.4a1.8 1.8 0 0 0 1.1-1.65V3h3.8v.09A1.8 1.8 0 0 0 15 4.7a1.8 1.8 0 0 0 1.98-.36l.06-.06 2.78 2.78-.06.06A1.8 1.8 0 0 0 19.4 9c.2.67.83 1.1 1.51 1.1H21v3.8h-.09A1.8 1.8 0 0 0 19.4 15Z"/></symbol>
     <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></symbol>
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M5 20h14"/></symbol>
     <symbol id="i-edit" viewBox="0 0 24 24"><path d="m4 16-.8 4.8L8 20 19 9a2.1 2.1 0 0 0-3-3L5 17Z"/><path d="m14.5 7.5 3 3"/></symbol>
     <symbol id="i-archive" viewBox="0 0 24 24"><path d="M3.5 7.5h5.7l2 2h9.3v8.5a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5V7.5Z"/><path d="M12 11.5v5M9.8 14.3 12 16.5l2.2-2.2"/></symbol>
     <symbol id="i-sum" viewBox="0 0 24 24"><path d="M17.5 4.5h-11l5.9 7.5-5.9 7.5h11"/></symbol>
@@ -154,7 +155,7 @@
         <p class="auth-switch" id="authSwitch" hidden>Уже есть доступ? <button class="link-button" type="button" data-auth-switch="login">Войти в реестр</button></p>
       </div>
       <div class="auth-panel-foot">
-        <span>Локальный реестр · v1.3</span>
+        <span>Локальный реестр · v1.4</span>
         <span>Данные зашифрованы · почта по желанию</span>
       </div>
     </div>
@@ -247,6 +248,10 @@
               <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>
               <span>CSV</span>
             </button>
+            <button class="btn btn--ghost btn--icon-text" type="button" id="importBtn" title="Импортировать CSV или резервную копию">
+              <svg class="icon" aria-hidden="true"><use href="#i-upload"></use></svg>
+              <span>Импорт</span>
+            </button>
           </div>
         </div>
 
@@ -285,7 +290,10 @@
 
         <footer class="ledger-foot">
           <p class="safety-note"><svg class="icon" aria-hidden="true"><use href="#i-shield"></use></svg><span><strong>Удаление недоступно.</strong> Запись можно только архивировать, подтвердив действие паролем.</span></p>
-          <span class="visible-count" id="visibleCount">0 записей</span>
+          <div class="ledger-foot-meta">
+            <span class="duplicate-summary" id="duplicateSummary" hidden></span>
+            <span class="visible-count" id="visibleCount">0 записей</span>
+          </div>
         </footer>
       </section>
 
@@ -397,6 +405,82 @@
     </div>
   </dialog>
 
+  <dialog class="modal" id="importDialog" aria-labelledby="importTitle">
+    <div class="modal-panel modal-panel--wide">
+      <header class="modal-head">
+        <div>
+          <p class="eyebrow">Перенос данных</p>
+          <h2 id="importTitle">Импорт записей</h2>
+          <p class="modal-subtitle">CSV из ПРИЁМКИ или зашифрованная резервная копия. Существующие записи не удаляются.</p>
+        </div>
+        <button class="modal-close" type="button" data-close-dialog="importDialog" aria-label="Закрыть">
+          <svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg>
+        </button>
+      </header>
+
+      <div class="import-content">
+        <div class="import-dropzone" id="importDropzone">
+          <span class="import-dropzone-icon" aria-hidden="true"><svg class="icon"><use href="#i-upload"></use></svg></span>
+          <strong>Выберите файл</strong>
+          <span>CSV из этой программы или резервная копия <code>.json</code>. Файл можно перетащить сюда.</span>
+          <button class="btn btn--ghost btn--small" type="button" id="importChooseBtn">Выбрать файл</button>
+        </div>
+        <input id="importFile" type="file" accept=".csv,text/csv,.json,application/json" hidden>
+
+        <div id="importPreview" hidden>
+          <div class="import-file-row">
+            <div class="import-file-copy">
+              <svg class="icon" aria-hidden="true"><use href="#i-file"></use></svg>
+              <div><strong id="importFileName">—</strong><span id="importFileMeta">—</span></div>
+            </div>
+            <button class="link-button" type="button" id="importChangeBtn">Другой файл</button>
+          </div>
+
+          <div class="import-summary" id="importSummary"></div>
+
+          <div class="import-table-wrap" id="importTableWrap">
+            <table class="import-table">
+              <thead>
+                <tr>
+                  <th scope="col">Дата</th>
+                  <th scope="col">Материал</th>
+                  <th scope="col">Кол-во</th>
+                  <th scope="col">Статус</th>
+                </tr>
+              </thead>
+              <tbody id="importRows"></tbody>
+            </table>
+          </div>
+
+          <p class="import-note" id="importNote" hidden></p>
+
+          <label class="switch-row import-option" id="importIncludeDuplicatesWrap" hidden for="importIncludeDuplicates">
+            <span class="switch">
+              <input type="checkbox" id="importIncludeDuplicates">
+              <span class="switch-track" aria-hidden="true"><span></span></span>
+            </span>
+            <span class="switch-copy">
+              <strong>Импортировать дубликаты</strong>
+              <small>Включите, если одинаковые строки — это отдельные поставки, а не повторный импорт.</small>
+            </span>
+          </label>
+
+          <div class="field" id="importPasswordField" hidden>
+            <label for="importPassword">Пароль от резервной копии</label>
+            <input type="password" id="importPassword" autocomplete="current-password" placeholder="Пароль, который использовался при создании копии">
+          </div>
+
+          <div class="form-error" id="importError" role="alert" hidden></div>
+        </div>
+      </div>
+
+      <footer class="modal-actions">
+        <button class="btn btn--ghost" type="button" data-close-dialog="importDialog">Отмена</button>
+        <button class="btn btn--primary" type="button" id="importSubmit" disabled>Импортировать</button>
+      </footer>
+    </div>
+  </dialog>
+
   <dialog class="modal modal--settings" id="settingsDialog" aria-labelledby="settingsTitle">
     <div class="modal-panel">
       <header class="modal-head">
@@ -434,6 +518,10 @@
           <button class="btn btn--ghost btn--small" type="button" id="settingsExportBtn">
             <svg class="icon" aria-hidden="true"><use href="#i-file"></use></svg>
             Экспорт CSV
+          </button>
+          <button class="btn btn--ghost btn--small" type="button" id="settingsImportBtn">
+            <svg class="icon" aria-hidden="true"><use href="#i-upload"></use></svg>
+            Импорт файла
           </button>
         </div>
       </section>
@@ -688,7 +776,7 @@
       </section>
 
       <footer class="settings-foot">
-        <span>ПРИЁМКА · v1.3</span>
+        <span>ПРИЁМКА · v1.4</span>
         <button class="link-button" type="button" id="settingsLockLink">Заблокировать реестр</button>
       </footer>
     </div>

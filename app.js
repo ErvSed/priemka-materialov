@@ -11,8 +11,9 @@ const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const INACTIVITY_MS = 30 * 60 * 1000;
 const HISTORY_LIMIT = 40;
 const UNLOCK_MARKER = 'PRIEMKA_UNLOCK_V1';
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.4.0';
 const MAX_BACKUP_BYTES = 10 * 1024 * 1024;
+const MAX_IMPORT_ROWS = 5_000;
 const MAIL_REQUEST_TIMEOUT_MS = 25_000;
 const MAIL_STATUS_TIMEOUT_MS = 10_000;
 const MAIL_SYNC_DEBOUNCE_MS = 1_200;
@@ -91,6 +92,8 @@ const refs = {
   searchInput: byId('searchInput'),
   periodSelect: byId('periodSelect'),
   exportBtn: byId('exportBtn'),
+  importBtn: byId('importBtn'),
+  duplicateSummary: byId('duplicateSummary'),
   unitTotals: byId('unitTotals'),
   totalsEmpty: byId('totalsEmpty'),
   tableWrap: byId('tableWrap'),
@@ -131,7 +134,26 @@ const refs = {
   settingsLockBtn: byId('settingsLockBtn'),
   settingsLockLink: byId('settingsLockLink'),
   settingsExportBtn: byId('settingsExportBtn'),
+  settingsImportBtn: byId('settingsImportBtn'),
   backupBtn: byId('backupBtn'),
+  importDialog: byId('importDialog'),
+  importDropzone: byId('importDropzone'),
+  importChooseBtn: byId('importChooseBtn'),
+  importFile: byId('importFile'),
+  importPreview: byId('importPreview'),
+  importFileName: byId('importFileName'),
+  importFileMeta: byId('importFileMeta'),
+  importChangeBtn: byId('importChangeBtn'),
+  importSummary: byId('importSummary'),
+  importTableWrap: byId('importTableWrap'),
+  importRows: byId('importRows'),
+  importNote: byId('importNote'),
+  importIncludeDuplicatesWrap: byId('importIncludeDuplicatesWrap'),
+  importIncludeDuplicates: byId('importIncludeDuplicates'),
+  importPasswordField: byId('importPasswordField'),
+  importPassword: byId('importPassword'),
+  importError: byId('importError'),
+  importSubmit: byId('importSubmit'),
   syncSummary: byId('syncSummary'),
   syncStatusDot: byId('syncStatusDot'),
   syncStatusTitle: byId('syncStatusTitle'),
@@ -199,6 +221,7 @@ const state = {
   period: 'all',
   authMode: 'setup',
   pendingRestore: null,
+  importSession: null,
   pendingArchiveId: null,
   editingId: null,
   sessionExpiresAt: null,
@@ -221,7 +244,8 @@ const busy = {
   archive: false,
   password: false,
   mail: false,
-  sync: false
+  sync: false,
+  import: false
 };
 
 const mailAbortControllers = new Set();
@@ -2525,7 +2549,7 @@ function closeDialog(dialog) {
 }
 
 function closeAllDialogs() {
-  [refs.materialDialog, refs.archiveDialog, refs.settingsDialog].forEach(closeDialog);
+  [refs.materialDialog, refs.archiveDialog, refs.settingsDialog, refs.importDialog].forEach(closeDialog);
 }
 
 function syncDialogBusyState() {
@@ -2608,7 +2632,7 @@ function setAuthMode(mode) {
   refs.authWarning.hidden = isRestore;
   refs.authWarningText.textContent = isSetup
     ? 'Пароль невозможно восстановить. Сохраните его в надёжном месте и периодически делайте резервную копию.'
-    : 'Если пароль забыт, войти в локальный реестр нельзя. Резервную копию можно восстановить только при первом запуске на чистом устройстве.';
+    : 'Если пароль забыт, войти в локальный реестр нельзя. Резервную копию можно импортировать в настройках после входа — записи объединятся.';
 
   refs.restoreBlock.hidden = !isSetup;
   refs.restoreSelected.hidden = !isRestore;
@@ -2923,6 +2947,8 @@ function lockApp(message = 'Реестр заблокирован.') {
   state.period = 'all';
   state.pendingArchiveId = null;
   state.editingId = null;
+  state.importSession = null;
+  busy.import = false;
   state.lastActivityAt = 0;
 
   refs.recordsBody.replaceChildren();
@@ -3039,10 +3065,63 @@ function makeActionButton(record, action, iconName, label, extraClass = '') {
   return button;
 }
 
-function createTableRow(record) {
+function normalizeDuplicateText(value) {
+  return String(value || '')
+    .normalize('NFKC')
+    .trim()
+    .toLocaleLowerCase('ru-RU')
+    .replaceAll('ё', 'е')
+    .replace(/[\s\u00A0\u202F]+/gu, ' ');
+}
+
+function normalizeDuplicateUnit(value) {
+  const unit = normalizeDuplicateText(value);
+  const aliases = {
+    'м2': 'м²',
+    'м3': 'м³',
+    'кв.м': 'м²',
+    'кв. м': 'м²',
+    'куб.м': 'м³',
+    'куб. м': 'м³'
+  };
+  return aliases[unit] || unit.replace(/\.$/u, '');
+}
+
+function duplicateSignature(record) {
+  const qty = Math.round((Number(record.qty) || 0) * 1000) / 1000;
+  return [
+    record.date,
+    normalizeDuplicateText(record.name),
+    normalizeDuplicateUnit(record.unit),
+    qty
+  ].join('\u0000');
+}
+
+function buildDuplicateSignatureCounts(records) {
+  const counts = new Map();
+  records.forEach((record) => {
+    const signature = duplicateSignature(record);
+    counts.set(signature, (counts.get(signature) || 0) + 1);
+  });
+  return counts;
+}
+
+function duplicateRecordCount(counts) {
+  let total = 0;
+  counts.forEach((count) => {
+    if (count > 1) total += count;
+  });
+  return total;
+}
+
+function createTableRow(record, duplicateCount = 0) {
   const row = document.createElement('tr');
   if (record.archivedAt) {
     row.classList.add('is-archived');
+  }
+  if (duplicateCount > 1) {
+    row.classList.add('is-duplicate');
+    row.dataset.duplicate = 'true';
   }
   row.dataset.id = record.id;
 
@@ -3070,6 +3149,13 @@ function createTableRow(record) {
     const badge = document.createElement('span');
     badge.className = 'archive-badge';
     badge.textContent = 'архив';
+    itemName.append(' ', badge);
+  }
+  if (duplicateCount > 1) {
+    const badge = document.createElement('span');
+    badge.className = 'duplicate-badge';
+    badge.textContent = duplicateCount > 2 ? `дубль ×${duplicateCount}` : 'дубль';
+    badge.title = 'Возможное дублирование: совпадают дата, материал, единица и количество';
     itemName.append(' ', badge);
   }
   nameCell.append(itemName);
@@ -3119,6 +3205,8 @@ function renderLedger() {
   const allActive = state.records.filter((record) => !record.archivedAt);
   const allArchived = state.records.filter((record) => record.archivedAt);
   const records = getFilteredRecords();
+  const duplicateCounts = buildDuplicateSignatureCounts(state.records);
+  const duplicates = duplicateRecordCount(duplicateCounts);
 
   refs.activeCount.textContent = String(allActive.length);
   refs.archiveCount.textContent = String(allArchived.length);
@@ -3126,10 +3214,20 @@ function renderLedger() {
   refs.tabArchive.classList.toggle('is-active', state.view === 'archive');
   refs.tabActive.setAttribute('aria-pressed', String(state.view === 'active'));
   refs.tabArchive.setAttribute('aria-pressed', String(state.view === 'archive'));
+  refs.duplicateSummary.hidden = duplicates === 0;
+  refs.duplicateSummary.textContent = duplicates
+    ? `${duplicates} ${recordWord(duplicates)} с возможным дублем`
+    : '';
+  refs.duplicateSummary.title = duplicates
+    ? 'Совпадают дата, материал, единица измерения и количество. Записи подсвечены в таблице.'
+    : '';
 
   refs.recordsBody.replaceChildren();
   const fragment = document.createDocumentFragment();
-  records.forEach((record) => fragment.append(createTableRow(record)));
+  records.forEach((record) => {
+    const count = duplicateCounts.get(duplicateSignature(record)) || 0;
+    fragment.append(createTableRow(record, count));
+  });
   refs.recordsBody.append(fragment);
 
   refs.tableWrap.hidden = records.length === 0;
@@ -4371,6 +4469,707 @@ function exportCsv() {
   showToast(`Экспортировано ${records.length} ${recordWord(records.length)} в CSV.`);
 }
 
+/* ---------- Import ---------- */
+
+function stripImportedFormulaGuard(value) {
+  const text = String(value ?? '');
+  return /^'[=+\-@\t\r]/u.test(text) ? text.slice(1) : text;
+}
+
+function parseImportedDate(value) {
+  const text = String(value ?? '').trim().replace(/\s*г\.?$/u, '');
+  if (!text) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/u.test(text)) {
+    return isValidDateISO(text) ? text : null;
+  }
+  const match = text.match(/^(\d{1,2})[./](\d{1,2})[./](\d{2,4})$/u);
+  if (!match) return null;
+  const day = Number(match[1]);
+  const month = Number(match[2]);
+  const year = match[3].length === 2 ? 2000 + Number(match[3]) : Number(match[3]);
+  const date = new Date(year, month - 1, day);
+  if (
+    Number.isNaN(date.getTime()) ||
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+  return toISOdate(date);
+}
+
+function parseImportedDateTime(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return null;
+
+  const match = text.match(
+    /^(\d{1,2})\.(\d{1,2})\.(\d{2,4})(?:,?\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/u
+  );
+  if (match) {
+    const day = Number(match[1]);
+    const month = Number(match[2]);
+    const year = match[3].length === 2 ? 2000 + Number(match[3]) : Number(match[3]);
+    const hour = match[4] === undefined ? 0 : Number(match[4]);
+    const minute = match[5] === undefined ? 0 : Number(match[5]);
+    const second = match[6] === undefined ? 0 : Number(match[6]);
+    const date = new Date(year, month - 1, day, hour, minute, second);
+    if (
+      Number.isNaN(date.getTime()) ||
+      date.getFullYear() !== year ||
+      date.getMonth() !== month - 1 ||
+      date.getDate() !== day ||
+      date.getHours() !== hour ||
+      date.getMinutes() !== minute ||
+      date.getSeconds() !== second
+    ) {
+      return null;
+    }
+    return date.toISOString();
+  }
+
+  if (isValidTimestamp(text)) {
+    return new Date(text).toISOString();
+  }
+  return null;
+}
+
+function countCsvDelimiter(line, delimiter) {
+  let count = 0;
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === '"') {
+      if (quoted && line[index + 1] === '"') {
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (!quoted && char === delimiter) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function detectCsvDelimiter(text) {
+  const firstLine = text.split(/\r?\n/u).find((line) => line.trim()) || '';
+  const semicolons = countCsvDelimiter(firstLine, ';');
+  const commas = countCsvDelimiter(firstLine, ',');
+  if (semicolons === 0 && commas === 0) {
+    throw new AppError('Не удалось определить разделитель CSV.');
+  }
+  return semicolons >= commas ? ';' : ',';
+}
+
+function parseCsvTable(text, delimiter) {
+  const rows = [];
+  let row = [];
+  let cell = '';
+  let quoted = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (quoted) {
+      if (char === '"') {
+        if (text[index + 1] === '"') {
+          cell += '"';
+          index += 1;
+        } else {
+          quoted = false;
+        }
+      } else {
+        cell += char;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      quoted = true;
+    } else if (char === delimiter) {
+      row.push(cell);
+      cell = '';
+    } else if (char === '\n') {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = '';
+    } else if (char !== '\r') {
+      cell += char;
+    }
+  }
+
+  if (quoted) {
+    throw new AppError('В CSV есть незакрытая кавычка.');
+  }
+  if (cell.length > 0 || row.length > 0) {
+    row.push(cell);
+    rows.push(row);
+  }
+  return rows.filter((cells) => cells.some((value) => value.trim().length > 0));
+}
+
+function normalizeImportHeader(value) {
+  return normalizeDuplicateText(value)
+    .replace(/:+$/u, '')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
+function resolveImportColumns(headers) {
+  const aliases = {
+    date: ['дата поступления', 'дата', 'date'],
+    name: ['наименование', 'материал', 'name'],
+    unit: ['единица', 'единица измерения', 'ед. изм.', 'ед.изм.', 'ед изм', 'unit'],
+    qty: ['количество', 'кол-во', 'кол-во.', 'qty', 'quantity'],
+    note: ['примечание', 'note'],
+    status: ['статус', 'status'],
+    archived: ['дата архивации', 'дата архива', 'archivedat', 'archived at'],
+    created: ['создано', 'createdat', 'created at'],
+    updated: ['изменено', 'updatedat', 'updated at']
+  };
+  const normalized = headers.map(normalizeImportHeader);
+  const columns = {};
+  Object.entries(aliases).forEach(([key, values]) => {
+    const index = normalized.findIndex((header) => values.includes(header));
+    if (index !== -1) {
+      columns[key] = index;
+    }
+  });
+
+  const missing = [];
+  ['date', 'name', 'unit', 'qty'].forEach((key) => {
+    if (columns[key] === undefined) missing.push(key);
+  });
+  if (missing.length > 0) {
+    throw new AppError(
+      'В CSV не найдены обязательные колонки: дата поступления, наименование, единица, количество.'
+    );
+  }
+  return columns;
+}
+
+function createImportedRecord(row, columns, now) {
+  const read = (key) => (
+    columns[key] === undefined ? '' : stripImportedFormulaGuard(row[columns[key]] ?? '')
+  );
+  const rawDate = read('date');
+  const rawName = read('name');
+  const rawUnit = read('unit');
+  const rawQty = read('qty');
+  const rawStatus = read('status');
+  const rawArchived = read('archived');
+  const rawCreated = read('created');
+  const rawUpdated = read('updated');
+
+  const parsed = {
+    rawDate,
+    rawName,
+    rawUnit,
+    rawQty,
+    rawStatus,
+    rawArchived,
+    record: null,
+    error: ''
+  };
+
+  const date = parseImportedDate(rawDate);
+  const name = rawName.trim();
+  const unit = rawUnit.trim();
+  const note = read('note');
+  const qty = parseQuantityInput(rawQty);
+
+  if (!date) {
+    parsed.error = 'Некорректная дата';
+    return parsed;
+  }
+  if (!name) {
+    parsed.error = 'Не указано наименование';
+    return parsed;
+  }
+  if (name.length > 200) {
+    parsed.error = 'Наименование длиннее 200 символов';
+    return parsed;
+  }
+  if (!unit) {
+    parsed.error = 'Не указана единица измерения';
+    return parsed;
+  }
+  if (unit.length > 20) {
+    parsed.error = 'Единица измерения длиннее 20 символов';
+    return parsed;
+  }
+  if (note.length > 500) {
+    parsed.error = 'Примечание длиннее 500 символов';
+    return parsed;
+  }
+  if (!qty) {
+    parsed.error = 'Некорректное количество';
+    return parsed;
+  }
+
+  const isArchived = /архив/iu.test(rawStatus) || Boolean(rawArchived.trim());
+  const createdAt = parseImportedDateTime(rawCreated) || now;
+  let updatedAt = parseImportedDateTime(rawUpdated) || createdAt;
+  if (updatedAt < createdAt) updatedAt = createdAt;
+  const archivedAt = isArchived
+    ? (parseImportedDateTime(rawArchived) || now)
+    : null;
+  const baseRecord = {
+    date,
+    name,
+    unit,
+    qty,
+    note
+  };
+  const history = [
+    {
+      action: 'create',
+      at: createdAt,
+      by: state.username,
+      snapshot: baseRecord
+    }
+  ];
+  if (archivedAt) {
+    history.push({
+      action: 'archive',
+      at: archivedAt,
+      by: state.username,
+      snapshot: baseRecord
+    });
+  }
+
+  try {
+    parsed.record = validateStoredRecord({
+      id: crypto.randomUUID(),
+      ...baseRecord,
+      createdAt,
+      updatedAt,
+      archivedAt,
+      history
+    });
+  } catch (error) {
+    console.error(error);
+    parsed.error = error instanceof AppError ? error.message : 'Некорректная запись';
+  }
+  return parsed;
+}
+
+function createCsvImportSession(text, fileName, fileSize) {
+  const cleanText = text.replace(/^\uFEFF/u, '');
+  if (!cleanText.trim()) {
+    throw new AppError('CSV-файл пуст.');
+  }
+  const delimiter = detectCsvDelimiter(cleanText);
+  const table = parseCsvTable(cleanText, delimiter);
+  if (table.length < 2) {
+    throw new AppError('В CSV нет строк с данными.');
+  }
+  if (table.length - 1 > MAX_IMPORT_ROWS) {
+    throw new AppError(`В CSV больше ${MAX_IMPORT_ROWS} строк. Импорт такого объёма не поддерживается.`);
+  }
+
+  const columns = resolveImportColumns(table[0]);
+  const now = new Date().toISOString();
+  const existingCounts = buildDuplicateSignatureCounts(state.records);
+  const fileCounts = new Map();
+  const seenCounts = new Map();
+  const rows = table.slice(1).map((cells, index) => {
+    const imported = createImportedRecord(cells, columns, now);
+    imported.lineNumber = index + 2;
+    if (imported.record) {
+      imported.signature = duplicateSignature(imported.record);
+      fileCounts.set(imported.signature, (fileCounts.get(imported.signature) || 0) + 1);
+    } else {
+      imported.signature = '';
+    }
+    return imported;
+  });
+
+  rows.forEach((row) => {
+    if (!row.record) return;
+    const seen = seenCounts.get(row.signature) || 0;
+    row.duplicateExisting = existingCounts.has(row.signature);
+    row.duplicateWithin = (fileCounts.get(row.signature) || 0) > 1;
+    row.duplicateWithinLater = seen > 0;
+    seenCounts.set(row.signature, seen + 1);
+  });
+
+  const validRows = rows.filter((row) => row.record);
+  return {
+    kind: 'csv',
+    fileName,
+    fileSize,
+    rows,
+    includeDuplicates: false,
+    validCount: validRows.length,
+    invalidCount: rows.length - validRows.length,
+    duplicateCount: validRows.filter(
+      (row) => row.duplicateExisting || row.duplicateWithin
+    ).length,
+    archivedCount: validRows.filter((row) => row.record.archivedAt).length
+  };
+}
+
+function selectedImportRows(session) {
+  if (!session || session.kind !== 'csv') return [];
+  return session.rows.filter((row) => (
+    row.record &&
+    (session.includeDuplicates || (!row.duplicateExisting && !row.duplicateWithinLater))
+  ));
+}
+
+function createImportPreviewRow(row) {
+  const tr = document.createElement('tr');
+  if (row.error) {
+    tr.classList.add('is-invalid');
+  } else if (row.duplicateExisting || row.duplicateWithin) {
+    tr.classList.add('is-duplicate');
+  }
+
+  const dateCell = document.createElement('td');
+  dateCell.textContent = row.record ? formatDate(row.record.date) : (row.rawDate || '—');
+
+  const nameCell = document.createElement('td');
+  nameCell.className = 'import-name';
+  const name = document.createElement('span');
+  name.textContent = row.record ? row.record.name : (row.rawName || '—');
+  nameCell.append(name);
+  if (row.record?.note) {
+    const note = document.createElement('span');
+    note.className = 'import-row-note';
+    note.textContent = row.record.note;
+    note.title = row.record.note;
+    nameCell.append(note);
+  }
+  if (row.error) {
+    const error = document.createElement('span');
+    error.className = 'import-row-error';
+    error.textContent = row.error;
+    nameCell.append(error);
+  }
+
+  const qtyCell = document.createElement('td');
+  qtyCell.className = 'import-qty';
+  qtyCell.textContent = row.record
+    ? `${formatQty(row.record.qty)} ${row.record.unit}`
+    : (row.rawQty || '—');
+
+  const statusCell = document.createElement('td');
+  if (row.error) {
+    const badge = document.createElement('span');
+    badge.className = 'import-badge import-badge--error';
+    badge.textContent = 'ошибка';
+    statusCell.append(badge);
+  } else {
+    if (row.duplicateExisting) {
+      const badge = document.createElement('span');
+      badge.className = 'import-badge import-badge--duplicate';
+      badge.textContent = 'уже есть';
+      statusCell.append(badge, document.createTextNode(' '));
+    }
+    if (row.duplicateWithin) {
+      const badge = document.createElement('span');
+      badge.className = 'import-badge import-badge--duplicate';
+      badge.textContent = 'дубль в файле';
+      statusCell.append(badge, document.createTextNode(' '));
+    }
+    if (row.record?.archivedAt) {
+      const badge = document.createElement('span');
+      badge.className = 'import-badge import-badge--archived';
+      badge.textContent = 'архив';
+      statusCell.append(badge, document.createTextNode(' '));
+    }
+    if (!row.duplicateExisting && !row.duplicateWithin && !row.record?.archivedAt) {
+      const badge = document.createElement('span');
+      badge.className = 'import-badge';
+      badge.textContent = 'новая';
+      statusCell.append(badge);
+    }
+  }
+
+  tr.append(dateCell, nameCell, qtyCell, statusCell);
+  return tr;
+}
+
+function renderImportPreview() {
+  const session = state.importSession;
+  if (!session) {
+    refs.importPreview.hidden = true;
+    refs.importDropzone.hidden = false;
+    refs.importSubmit.disabled = true;
+    refs.importSubmit.textContent = 'Импортировать';
+    return;
+  }
+
+  refs.importDropzone.hidden = true;
+  refs.importPreview.hidden = false;
+  refs.importFileName.textContent = session.fileName;
+
+  if (session.kind === 'backup') {
+    const date = session.exportedAt
+      ? dateFormatter.format(new Date(session.exportedAt))
+      : 'дата неизвестна';
+    refs.importFileMeta.textContent = `Зашифрованная копия · ${session.account.username} · ${date}`;
+    refs.importSummary.textContent = 'Введите пароль, который использовался при создании копии. Записи объединятся с текущим реестром, существующие данные не удаляются.';
+    refs.importTableWrap.hidden = true;
+    refs.importIncludeDuplicatesWrap.hidden = true;
+    refs.importPasswordField.hidden = false;
+    refs.importNote.hidden = false;
+    refs.importNote.textContent = 'Настройки почты и синхронизации из копии не импортируются — только записи.';
+    refs.importSubmit.disabled = busy.import;
+    refs.importSubmit.textContent = busy.import ? 'Импортируем…' : 'Импортировать копию';
+    return;
+  }
+
+  const selected = selectedImportRows(session);
+  const archivedSelected = selected.filter((row) => row.record.archivedAt).length;
+  refs.importFileMeta.textContent = [
+    'CSV',
+    `${session.validCount} ${recordWord(session.validCount)}`,
+    session.archivedCount ? `${session.archivedCount} в архиве` : '',
+    session.invalidCount ? `${session.invalidCount} с ошибками` : ''
+  ].filter(Boolean).join(' · ');
+  refs.importSummary.textContent = [
+    `Всего строк: ${session.rows.length}.`,
+    `Будет импортировано: ${selected.length}.`,
+    `Дубликатов: ${session.duplicateCount}.`,
+    `Ошибок: ${session.invalidCount}.`
+  ].join(' ');
+  refs.importTableWrap.hidden = false;
+  refs.importPasswordField.hidden = true;
+  refs.importIncludeDuplicatesWrap.hidden = session.duplicateCount === 0;
+  refs.importIncludeDuplicates.checked = session.includeDuplicates;
+  refs.importNote.hidden = false;
+  refs.importNote.textContent = session.duplicateCount > 0
+    ? 'Подсвечены строки с совпадением даты, материала, единицы и количества. По умолчанию совпадения с реестром и повторные строки внутри файла пропускаются; первый экземпляр внутри файла сохраняется. Включите «Импортировать дубликаты», если это отдельные поставки.'
+    : 'Совпадений с текущим реестром нет.';
+  if (session.rows.length > 100) {
+    refs.importNote.textContent += ' В таблице показаны первые 100 строк.';
+  }
+
+  refs.importRows.replaceChildren();
+  const fragment = document.createDocumentFragment();
+  session.rows.slice(0, 100).forEach((row) => {
+    fragment.append(createImportPreviewRow(row));
+  });
+  refs.importRows.append(fragment);
+
+  refs.importSubmit.disabled = busy.import || selected.length === 0;
+  refs.importSubmit.textContent = busy.import
+    ? 'Импортируем…'
+    : selected.length
+      ? `Импортировать ${selected.length}`
+      : 'Импортировать';
+  if (archivedSelected) {
+    refs.importSummary.textContent += ` В архиве будет ${archivedSelected}.`;
+  }
+}
+
+function resetImportDialog() {
+  state.importSession = null;
+  busy.import = false;
+  refs.importFile.value = '';
+  refs.importPassword.value = '';
+  refs.importIncludeDuplicates.checked = false;
+  refs.importDropzone.hidden = false;
+  refs.importDropzone.classList.remove('is-dragging');
+  refs.importPreview.hidden = true;
+  refs.importTableWrap.hidden = false;
+  refs.importPasswordField.hidden = true;
+  refs.importIncludeDuplicatesWrap.hidden = true;
+  refs.importNote.hidden = true;
+  refs.importFileName.textContent = '—';
+  refs.importFileMeta.textContent = '—';
+  refs.importSummary.textContent = '';
+  refs.importRows.replaceChildren();
+  refs.importSubmit.disabled = true;
+  refs.importSubmit.textContent = 'Импортировать';
+  refs.importSubmit.classList.remove('is-busy');
+  refs.importChooseBtn.disabled = false;
+  refs.importChangeBtn.disabled = false;
+  refs.importIncludeDuplicates.disabled = false;
+  refs.importPassword.disabled = false;
+  setError(refs.importError, '');
+}
+
+function openImportDialog() {
+  if (!state.key || refs.appView.hidden) return;
+  if (refs.importDialog.open) return;
+  resetImportDialog();
+  refs.importDialog.showModal();
+}
+
+function openImportFromSettings() {
+  closeDialog(refs.settingsDialog);
+  window.setTimeout(openImportDialog, 0);
+}
+
+function setImportBusy(isBusy) {
+  busy.import = isBusy;
+  refs.importChooseBtn.disabled = isBusy;
+  refs.importChangeBtn.disabled = isBusy;
+  refs.importIncludeDuplicates.disabled = isBusy;
+  refs.importPassword.disabled = isBusy;
+  refs.importFile.disabled = isBusy;
+  refs.importSubmit.classList.toggle('is-busy', isBusy);
+  if (isBusy) {
+    refs.importSubmit.disabled = true;
+    refs.importSubmit.textContent = 'Импортируем…';
+  } else {
+    renderImportPreview();
+  }
+}
+
+function looksLikeBackupFile(file, text) {
+  const name = String(file.name || '').toLowerCase();
+  if (name.endsWith('.json')) return true;
+  if (name.endsWith('.csv')) return false;
+  return text.trimStart().startsWith('{');
+}
+
+async function handleImportFile(file) {
+  if (!file || busy.import) return;
+  setError(refs.importError, '');
+  refs.importDropzone.classList.remove('is-dragging');
+  refs.importDropzone.hidden = false;
+  refs.importPreview.hidden = true;
+  refs.importSubmit.disabled = true;
+  state.importSession = null;
+
+  if (file.size > MAX_BACKUP_BYTES) {
+    setError(refs.importError, 'Файл слишком большой. Максимум — 10 МБ.');
+    refs.importFile.value = '';
+    return;
+  }
+
+  try {
+    const text = await file.text();
+    if (looksLikeBackupFile(file, text)) {
+      let raw;
+      try {
+        raw = JSON.parse(text);
+      } catch {
+        throw new AppError('Не удалось прочитать JSON резервной копии.');
+      }
+      const account = extractBackupAccount(raw);
+      state.importSession = {
+        kind: 'backup',
+        fileName: file.name,
+        fileSize: file.size,
+        account,
+        exportedAt: raw?.format === 'priemka-backup' ? raw.exportedAt : account.updatedAt
+      };
+    } else {
+      state.importSession = createCsvImportSession(text, file.name, file.size);
+    }
+    refs.importIncludeDuplicates.checked = false;
+    renderImportPreview();
+  } catch (error) {
+    console.error(error);
+    state.importSession = null;
+    setError(
+      refs.importError,
+      error instanceof AppError
+        ? error.message
+        : 'Не удалось прочитать файл. Выберите CSV из ПРИЁМКИ или JSON-копию.'
+    );
+    renderImportPreview();
+  } finally {
+    refs.importFile.value = '';
+  }
+}
+
+async function handleImportSubmit() {
+  if (busy.import || !state.importSession) return;
+  const session = state.importSession;
+  setError(refs.importError, '');
+  setImportBusy(true);
+
+  try {
+    if (session.kind === 'csv') {
+      const selected = selectedImportRows(session);
+      if (selected.length === 0) {
+        throw new AppError('Нет новых записей для импорта. Включите импорт дубликатов или проверьте файл.');
+      }
+      const imported = selected.map((row) => row.record);
+      await persistRecords([...state.records, ...imported]);
+      const skipped = session.validCount - selected.length;
+      const archived = imported.filter((record) => record.archivedAt).length;
+      const parts = [
+        `Импортировано ${imported.length} ${recordWord(imported.length)}.`,
+        skipped ? `Пропущено дублей: ${skipped}.` : '',
+        session.invalidCount ? `Строк с ошибками: ${session.invalidCount}.` : '',
+        archived ? `${archived} ${recordWord(archived)} в архиве.` : ''
+      ].filter(Boolean);
+      setImportBusy(false);
+      resetImportDialog();
+      closeDialog(refs.importDialog);
+      renderAll();
+      showToast(parts.join(' '), { timeout: 8_000 });
+      return;
+    }
+
+    const password = refs.importPassword.value;
+    if (!password) {
+      throw new AppError('Введите пароль от резервной копии.');
+    }
+    let key;
+    try {
+      key = await deriveKey(password, session.account.salt, session.account.iterations);
+    } catch {
+      throw new AppError('Не удалось обработать пароль в этом браузере.');
+    }
+    const valid = await verifyAccountKey(key, session.account);
+    if (!valid) {
+      throw new AppError('Неверный пароль от резервной копии.');
+    }
+
+    let backupRecords;
+    try {
+      const payload = await decryptJson(key, session.account.vault);
+      ({ records: backupRecords } = validateVaultPayload(payload));
+    } catch (error) {
+      console.error(error);
+      throw new AppError('Не удалось расшифровать резервную копию. Файл повреждён.');
+    }
+
+    const merged = mergeRecordCollections(state.records, backupRecords);
+    const before = new Map(state.records.map((record) => [record.id, record]));
+    const added = backupRecords.filter((record) => !before.has(record.id)).length;
+    const updated = merged.filter((record) => {
+      const previous = before.get(record.id);
+      return previous && canonicalRecords([previous]) !== canonicalRecords([record]);
+    }).length;
+    const duplicateIds = backupRecords.filter((record) => before.has(record.id)).length;
+
+    if (canonicalRecords(merged) === canonicalRecords(state.records)) {
+      setImportBusy(false);
+      resetImportDialog();
+      closeDialog(refs.importDialog);
+      showToast('В резервной копии нет новых данных для этого реестра.', { type: 'info' });
+      return;
+    }
+
+    await persistRecords(merged);
+    setImportBusy(false);
+    resetImportDialog();
+    closeDialog(refs.importDialog);
+    renderAll();
+    showToast(
+      `Импорт копии: добавлено ${added}, обновлено ${updated}${duplicateIds ? `, совпало по ID: ${duplicateIds}` : ''}.`,
+      { timeout: 8_000 }
+    );
+  } catch (error) {
+    console.error(error);
+    setError(
+      refs.importError,
+      error instanceof AppError ? error.message : 'Не удалось импортировать данные.'
+    );
+    setImportBusy(false);
+  }
+}
+
 /* ---------- Event wiring ---------- */
 
 function bindEvents() {
@@ -4431,6 +5230,50 @@ function bindEvents() {
   refs.exportBtn.addEventListener('click', exportCsv);
   refs.settingsExportBtn.addEventListener('click', exportCsv);
   refs.backupBtn.addEventListener('click', downloadBackup);
+
+  refs.importBtn.addEventListener('click', openImportDialog);
+  refs.settingsImportBtn.addEventListener('click', openImportFromSettings);
+  refs.importChooseBtn.addEventListener('click', () => refs.importFile.click());
+  refs.importChangeBtn.addEventListener('click', () => {
+    resetImportDialog();
+    refs.importFile.click();
+  });
+  refs.importFile.addEventListener('change', () => {
+    const file = refs.importFile.files && refs.importFile.files[0];
+    if (file) {
+      handleImportFile(file);
+    }
+  });
+  refs.importIncludeDuplicates.addEventListener('change', () => {
+    if (!state.importSession) return;
+    state.importSession.includeDuplicates = refs.importIncludeDuplicates.checked;
+    setError(refs.importError, '');
+    renderImportPreview();
+  });
+  refs.importPassword.addEventListener('input', () => setError(refs.importError, ''));
+  refs.importSubmit.addEventListener('click', handleImportSubmit);
+  refs.importDialog.addEventListener('close', resetImportDialog);
+  refs.importDialog.addEventListener('cancel', (event) => {
+    if (busy.import) event.preventDefault();
+  });
+  ['dragenter', 'dragover'].forEach((eventName) => {
+    refs.importDropzone.addEventListener(eventName, (event) => {
+      event.preventDefault();
+      if (!busy.import) refs.importDropzone.classList.add('is-dragging');
+    });
+  });
+  ['dragleave', 'dragend'].forEach((eventName) => {
+    refs.importDropzone.addEventListener(eventName, () => {
+      refs.importDropzone.classList.remove('is-dragging');
+    });
+  });
+  refs.importDropzone.addEventListener('drop', (event) => {
+    event.preventDefault();
+    refs.importDropzone.classList.remove('is-dragging');
+    if (busy.import) return;
+    const file = event.dataTransfer?.files?.[0];
+    if (file) handleImportFile(file);
+  });
 
   refs.recordsBody.addEventListener('click', (event) => {
     const target = event.target instanceof Element ? event.target.closest('button[data-action]') : null;
@@ -4510,6 +5353,7 @@ function bindEvents() {
   document.querySelectorAll('[data-close-dialog]').forEach((button) => {
     button.addEventListener('click', () => {
       const dialog = byId(button.dataset.closeDialog);
+      if (dialog === refs.importDialog && busy.import) return;
       closeDialog(dialog);
     });
   });
