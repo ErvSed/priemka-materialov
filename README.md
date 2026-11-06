@@ -2,12 +2,16 @@
 
 > **Новый центральный сайт:** https://45-81-253-203.sslip.io/priemka/
 >
-> Вход по коду с любого устройства. Материалы и пользователи хранятся в одной базе на сервере, а не в браузере. Старый локальный сайт на GitHub Pages остаётся как архивный инструмент для резервных копий и импорта старых CSV.
+> Вход по коду с любого устройства. Материалы и пользователи хранятся в одной базе на сервере, а не в браузере. На GitHub Pages теперь точка входа: новая общая база и архив v1.
+>
+> **GitHub Pages:** https://ervsed.github.io/priemka-materialov/  
+> **Архив v1:** https://ervsed.github.io/priemka-materialov/v1/
 
 Реестр материалов, поступающих на объект. Дата, наименование, единица измерения и количество — без лишней бюрократии, случайных удалений и потерянных строк. Одна и та же ведомость доступна на нескольких устройствах.
 
-**Старая локальная версия:** https://ervsed.github.io/priemka-materialov/
-**Новый центральный портал:** https://45-81-253-203.sslip.io/priemka/
+**GitHub Pages (точка входа):** https://ervsed.github.io/priemka-materialov/  
+**Архив старой локальной версии v1:** https://ervsed.github.io/priemka-materialov/v1/  
+**Новый центральный портал:** https://45-81-253-203.sslip.io/priemka/  
 **Почтовый сервис:** [mailer/README.md](mailer/README.md) — необязательный backend для писем по расписанию.
 
 ![Реестр материалов](docs/dashboard.png)
@@ -32,7 +36,9 @@
 
 ## Старая локальная версия
 
-Описание ниже относится к локальному приложению на GitHub Pages. Оно сохранено для доступа к старым резервным копиям и как автономный архив.
+Старая версия перенесена в [`v1/`](v1/README.md) и доступна по адресу https://ervsed.github.io/priemka-materialov/v1/. Она сохранена для доступа к старым локальным данным, резервным копиям и импорту CSV. Не вносите в неё новые записи.
+
+Описание ниже относится к локальному приложению v1. Оно сохранено как автономный архив.
 
 ## Возможности
 
@@ -208,14 +214,15 @@ npm run test:integration
 
 ```text
 .
-├── index.html              # интерфейс и SVG-иконки
-├── styles.css              # дизайн-система и адаптивность
-├── app.js                  # шифрование, реестр, архив, общая база, почта
-├── sw.js                   # офлайн-оболочка
-├── manifest.webmanifest    # PWA-манифест
-├── assets/                 # иконки приложения
-├── fonts/                  # self-hosted Manrope + лицензия OFL
-├── docs/                   # скриншоты
+├── index.html              # точка входа GitHub Pages: новая база / архив v1
+├── v1/                     # архив старого локального приложения
+│   ├── index.html
+│   ├── app.js
+│   ├── styles.css
+│   ├── sw.js
+│   ├── manifest.webmanifest
+│   ├── assets/
+│   └── fonts/
 ├── portal/                 # новый центральный сайт: вход по коду, общая база
 │   ├── index.html
 │   ├── styles.css
@@ -226,9 +233,11 @@ npm run test:integration
 │   ├── priemka_sync.py
 │   ├── create_admin.py     # создание первого администратора
 │   ├── test_sync.py
+│   ├── test_portal.py
 │   ├── backup.py
 │   ├── priemka-sync.service
 │   ├── nginx-priemka-api.conf
+│   ├── nginx-priemka-web.conf
 │   └── priemka-rate.conf
 ├── mailer/                 # необязательный SMTP-backend и планировщик
 │   ├── server.mjs

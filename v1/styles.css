@@ -4446,3 +4446,33 @@ body[data-role="user"] [data-admin-only] {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Archive v1 pointer to the central portal */
+.archive-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 8px 16px;
+  color: var(--paper);
+  background: var(--ink);
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+  text-decoration: none;
+}
+.archive-bar span {
+  color: rgba(241, 237, 228, 0.62);
+  font-weight: 500;
+}
+.archive-bar .icon {
+  width: 14px;
+  height: 14px;
+  margin-left: 2px;
+}
+.archive-bar:hover {
+  color: #fff;
+  background: var(--ink-2);
+}
+
