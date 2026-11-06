@@ -34,6 +34,8 @@ from urllib.parse import urlsplit
 MAX_RECORDS = 5_000
 HISTORY_LIMIT = 40
 DEFAULT_MAX_BODY = 5 * 1024 * 1024
+SESSION_COOKIE = "priemka_session"
+SESSION_DAYS = 30
 ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,100}$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 USERNAME_RE = re.compile(r"^[A-Za-zА-Яа-яЁё0-9 ._-]{2,64}$")
@@ -56,6 +58,7 @@ class Config:
     port: int
     allowed_origins: frozenset[str]
     max_body: int
+    cookie_secure: bool
 
 
 def load_config() -> Config:
@@ -79,6 +82,7 @@ def load_config() -> Config:
         port=int(os.environ.get("PRIEMKA_PORT", "8012")),
         allowed_origins=origins,
         max_body=int(os.environ.get("PRIEMKA_MAX_BODY", str(DEFAULT_MAX_BODY))),
+        cookie_secure=os.environ.get("PRIEMKA_COOKIE_SECURE", "1") != "0",
     )
 
 
@@ -128,7 +132,32 @@ def init_db(path: str) -> None:
             """
         )
         connection.execute(
-            "INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '2')"
+            """
+            CREATE TABLE IF NOT EXISTS accounts (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                code_sha256 TEXT NOT NULL UNIQUE,
+                role TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                last_login_at TEXT,
+                revoked_at TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sessions (
+                token_sha256 TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '3')"
         )
         connection.commit()
 
@@ -516,6 +545,256 @@ def revoke_user(config: Config, user_id: str) -> dict:
     return public_user(updated)
 
 
+# ---------- Accounts and sessions for the central portal ----------
+
+
+def public_account(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "role": row["role"],
+        "active": bool(row["active"]),
+        "createdAt": row["created_at"],
+        "lastLoginAt": row["last_login_at"],
+        "revokedAt": row["revoked_at"],
+    }
+
+
+def generate_login_code(role: str) -> str:
+    prefix = "adm_" if role == "admin" else "usr_"
+    return prefix + secrets.token_urlsafe(18)
+
+
+def create_account(config: Config, raw_name: object, role: str = "user") -> dict:
+    if role not in {"admin", "user"}:
+        raise ApiError(HTTPStatus.BAD_REQUEST, "Некорректная роль")
+    if not isinstance(raw_name, str):
+        raise ApiError(HTTPStatus.BAD_REQUEST, "Укажите имя")
+    name = raw_name.strip()
+    if not USERNAME_RE.fullmatch(name):
+        raise ApiError(
+            HTTPStatus.BAD_REQUEST,
+            "Имя: от 2 до 64 символов, буквы, цифры, пробел, точка, дефис или подчёркивание",
+        )
+
+    account_id = "acc_" + secrets.token_hex(8)
+    code = generate_login_code(role)
+    code_hash = token_sha256(code)
+    created_at = iso_now()
+
+    with connect_db(config.db_path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            active_names = connection.execute(
+                "SELECT name FROM accounts WHERE active = 1"
+            ).fetchall()
+            if any(row["name"].casefold() == name.casefold() for row in active_names):
+                raise ApiError(HTTPStatus.CONFLICT, "Пользователь с таким именем уже существует")
+            connection.execute(
+                """
+                INSERT INTO accounts(id, name, code_sha256, role, active, created_at, last_login_at, revoked_at)
+                VALUES (?, ?, ?, ?, 1, ?, NULL, NULL)
+                """,
+                (account_id, name, code_hash, role, created_at),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+
+    return {
+        "id": account_id,
+        "name": name,
+        "role": role,
+        "active": True,
+        "createdAt": created_at,
+        "lastLoginAt": None,
+        "revokedAt": None,
+        "code": code,
+    }
+
+
+def list_accounts(config: Config) -> list[dict]:
+    with connect_db(config.db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT id, name, role, active, created_at, last_login_at, revoked_at
+            FROM accounts
+            ORDER BY CASE role WHEN 'admin' THEN 0 ELSE 1 END, active DESC, created_at ASC
+            """
+        ).fetchall()
+    return [public_account(row) for row in rows]
+
+
+def find_account_by_code(config: Config, code: str) -> dict | None:
+    if not isinstance(code, str) or not code.strip():
+        return None
+    digest = token_sha256(code.strip())
+    with connect_db(config.db_path) as connection:
+        row = connection.execute(
+            """
+            SELECT id, name, role, active, created_at, last_login_at, revoked_at
+            FROM accounts
+            WHERE code_sha256 = ? AND active = 1
+            """,
+            (digest,),
+        ).fetchone()
+        if not row:
+            return None
+        now = iso_now()
+        connection.execute(
+            "UPDATE accounts SET last_login_at = ? WHERE id = ?",
+            (now, row["id"]),
+        )
+        connection.commit()
+    result = public_account(row)
+    result["lastLoginAt"] = now
+    return result
+
+
+def create_session(config: Config, account_id: str) -> str:
+    token = secrets.token_urlsafe(32)
+    now = dt.datetime.now(dt.timezone.utc)
+    expires = now + dt.timedelta(days=SESSION_DAYS)
+    created_at = now.isoformat(timespec="seconds").replace("+00:00", "Z")
+    expires_at = expires.isoformat(timespec="seconds").replace("+00:00", "Z")
+    with connect_db(config.db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO sessions(token_sha256, account_id, created_at, expires_at, last_seen_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (token_sha256(token), account_id, created_at, expires_at, created_at),
+        )
+        connection.commit()
+    return token
+
+
+def session_account(config: Config, token: str) -> dict | None:
+    if not token:
+        return None
+    now = iso_now()
+    digest = token_sha256(token)
+    with connect_db(config.db_path) as connection:
+        row = connection.execute(
+            """
+            SELECT a.id, a.name, a.role, a.active, a.created_at, a.last_login_at, a.revoked_at,
+                   s.expires_at
+            FROM sessions s
+            JOIN accounts a ON a.id = s.account_id
+            WHERE s.token_sha256 = ? AND a.active = 1 AND s.expires_at > ?
+            """,
+            (digest, now),
+        ).fetchone()
+        if not row:
+            return None
+        connection.execute(
+            "UPDATE sessions SET last_seen_at = ? WHERE token_sha256 = ?",
+            (now, digest),
+        )
+        connection.commit()
+    return public_account(row)
+
+
+def delete_session(config: Config, token: str) -> None:
+    if not token:
+        return
+    with connect_db(config.db_path) as connection:
+        connection.execute(
+            "DELETE FROM sessions WHERE token_sha256 = ?",
+            (token_sha256(token),),
+        )
+        connection.commit()
+
+
+def reset_account_code(config: Config, account_id: str) -> dict:
+    new_code = generate_login_code("user")
+    code_hash = token_sha256(new_code)
+    with connect_db(config.db_path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            row = connection.execute(
+                "SELECT id, name, role, active FROM accounts WHERE id = ?",
+                (account_id,),
+            ).fetchone()
+            if not row:
+                raise ApiError(HTTPStatus.NOT_FOUND, "Пользователь не найден")
+            if row["role"] == "admin":
+                raise ApiError(HTTPStatus.FORBIDDEN, "Код администратора нельзя изменить здесь")
+            connection.execute(
+                "UPDATE accounts SET code_sha256 = ?, revoked_at = NULL, active = 1 WHERE id = ?",
+                (code_hash, account_id),
+            )
+            connection.execute(
+                "DELETE FROM sessions WHERE account_id = ?",
+                (account_id,),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+    return {"id": account_id, "name": row["name"], "role": "user", "code": new_code}
+
+
+def revoke_account(config: Config, account_id: str) -> dict:
+    revoked_at = iso_now()
+    with connect_db(config.db_path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            row = connection.execute(
+                "SELECT id, name, role, active, created_at, last_login_at, revoked_at FROM accounts WHERE id = ?",
+                (account_id,),
+            ).fetchone()
+            if not row:
+                raise ApiError(HTTPStatus.NOT_FOUND, "Пользователь не найден")
+            if row["role"] == "admin":
+                raise ApiError(HTTPStatus.FORBIDDEN, "Администратора нельзя отозвать")
+            connection.execute(
+                "UPDATE accounts SET active = 0, revoked_at = ? WHERE id = ?",
+                (revoked_at, account_id),
+            )
+            connection.execute(
+                "DELETE FROM sessions WHERE account_id = ?",
+                (account_id,),
+            )
+            connection.commit()
+            updated = connection.execute(
+                """
+                SELECT id, name, role, active, created_at, last_login_at, revoked_at
+                FROM accounts WHERE id = ?
+                """,
+                (account_id,),
+            ).fetchone()
+        except Exception:
+            connection.rollback()
+            raise
+    return public_account(updated)
+
+
+def load_all_records(config: Config) -> list[dict]:
+    with connect_db(config.db_path) as connection:
+        rows = connection.execute("SELECT id, data FROM records ORDER BY id").fetchall()
+    return [decode_record(row) for row in rows]
+
+
+def enforce_user_archive_rules(config: Config, incoming_raw: object) -> None:
+    if not isinstance(incoming_raw, list):
+        return
+    existing = {record["id"]: record for record in load_all_records(config)}
+    for raw in incoming_raw:
+        if not isinstance(raw, dict):
+            continue
+        record_id = raw.get("id")
+        if not isinstance(record_id, str):
+            continue
+        was_archived = bool(existing.get(record_id, {}).get("archivedAt"))
+        will_be_archived = bool(raw.get("archivedAt"))
+        if was_archived != will_be_archived:
+            raise ApiError(HTTPStatus.FORBIDDEN, "Архивация доступна администратору")
+        if record_id not in existing and will_be_archived:
+            raise ApiError(HTTPStatus.FORBIDDEN, "Архивация доступна администратору")
+
+
 class SyncServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -608,6 +887,38 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def _cookie(self, name: str) -> str:
+        header = self.headers.get("Cookie") or ""
+        for part in header.split(";"):
+            key, _, value = part.strip().partition("=")
+            if key == name:
+                return value
+        return ""
+
+    def _session_cookie(self, value: str, clear: bool = False) -> str:
+        parts = [
+            f"{SESSION_COOKIE}={value}",
+            "Path=/",
+            "HttpOnly",
+            "SameSite=Strict",
+        ]
+        if self.server.config.cookie_secure:
+            parts.append("Secure")
+        if clear:
+            parts.extend(["Max-Age=0", "Expires=Thu, 01 Jan 1970 00:00:00 GMT"])
+        else:
+            parts.append(f"Max-Age={SESSION_DAYS * 24 * 3600}")
+        return "; ".join(parts)
+
+    def _current_account(self, admin: bool = False) -> dict:
+        token = self._cookie(SESSION_COOKIE)
+        account = session_account(self.server.config, token)
+        if not account:
+            raise ApiError(HTTPStatus.UNAUTHORIZED, "Требуется вход")
+        if admin and account["role"] != "admin":
+            raise ApiError(HTTPStatus.FORBIDDEN, "Действие доступно администратору")
+        return account
+
     def _require_actor(self, admin: bool = False) -> dict:
         supplied = bearer_token(self.headers.get("Authorization"))
         actor = authenticate(self.server.config, supplied)
@@ -624,6 +935,25 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(
                     HTTPStatus.OK,
                     {"ok": True, "service": "priemka-sync"},
+                )
+                return
+            if path == "/session":
+                account = self._current_account()
+                self._send_json(HTTPStatus.OK, {"ok": True, "account": account})
+                return
+            if path == "/records":
+                self._current_account()
+                records = load_all_records(self.server.config)
+                self._send_json(
+                    HTTPStatus.OK,
+                    {"ok": True, "records": records, "count": len(records), "serverTime": iso_now()},
+                )
+                return
+            if path == "/accounts":
+                self._current_account(admin=True)
+                self._send_json(
+                    HTTPStatus.OK,
+                    {"ok": True, "accounts": list_accounts(self.server.config)},
                 )
                 return
             if path == "/users":
@@ -646,6 +976,66 @@ class Handler(BaseHTTPRequestHandler):
             self._guard_origin()
             path = urlsplit(self.path).path.rstrip("/") or "/"
             parts = [part for part in path.split("/") if part]
+
+            if path == "/login":
+                payload = self._read_json()
+                account = find_account_by_code(self.server.config, payload.get("code"))
+                if not account:
+                    raise ApiError(HTTPStatus.UNAUTHORIZED, "Неверный код доступа")
+                token = create_session(self.server.config, account["id"])
+                self._send_json(
+                    HTTPStatus.OK,
+                    {"ok": True, "account": account},
+                    {"Set-Cookie": self._session_cookie(token)},
+                )
+                return
+
+            if path == "/logout":
+                token = self._cookie(SESSION_COOKIE)
+                delete_session(self.server.config, token)
+                self._send_json(
+                    HTTPStatus.OK,
+                    {"ok": True},
+                    {"Set-Cookie": self._session_cookie("", clear=True)},
+                )
+                return
+
+            if path == "/records":
+                account = self._current_account()
+                payload = self._read_json()
+                incoming = payload.get("records")
+                if account["role"] != "admin":
+                    enforce_user_archive_rules(self.server.config, incoming)
+                records = sync_records(self.server.config, incoming)
+                self._send_json(
+                    HTTPStatus.OK,
+                    {
+                        "ok": True,
+                        "records": records,
+                        "count": len(records),
+                        "serverTime": iso_now(),
+                    },
+                )
+                return
+
+            if path == "/accounts":
+                self._current_account(admin=True)
+                payload = self._read_json()
+                account = create_account(self.server.config, payload.get("name"), "user")
+                self._send_json(HTTPStatus.CREATED, {"ok": True, "account": account})
+                return
+
+            if len(parts) == 3 and parts[0] == "accounts" and parts[2] in {"reset", "revoke"}:
+                self._current_account(admin=True)
+                if not re.fullmatch(r"[A-Za-z0-9_]{8,64}", parts[1]):
+                    raise ApiError(HTTPStatus.NOT_FOUND, "Пользователь не найден")
+                if parts[2] == "reset":
+                    account = reset_account_code(self.server.config, parts[1])
+                    self._send_json(HTTPStatus.OK, {"ok": True, "account": account})
+                else:
+                    account = revoke_account(self.server.config, parts[1])
+                    self._send_json(HTTPStatus.OK, {"ok": True, "account": account})
+                return
 
             if path == "/sync":
                 actor = self._require_actor()
