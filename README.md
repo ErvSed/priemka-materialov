@@ -4,15 +4,15 @@
 >
 > Вход по коду с любого устройства. Материалы и пользователи хранятся в одной базе на сервере, а не в браузере. На GitHub Pages теперь точка входа: новая общая база и архив v1.
 >
-> **GitHub Pages:** https://ervsed.github.io/priemka-materialov/  
+> **GitHub Pages:** https://ervsed.github.io/priemka-materialov/
 > **Архив v1:** https://ervsed.github.io/priemka-materialov/v1/
 
 Реестр материалов, поступающих на объект. Дата, наименование, единица измерения и количество — без лишней бюрократии, случайных удалений и потерянных строк. Одна и та же ведомость доступна на нескольких устройствах.
 
-**GitHub Pages (точка входа):** https://ervsed.github.io/priemka-materialov/  
-**Архив старой локальной версии v1:** https://ervsed.github.io/priemka-materialov/v1/  
-**Новый центральный портал:** https://45-81-253-203.sslip.io/priemka/  
-**Почтовый сервис:** [mailer/README.md](mailer/README.md) — необязательный backend для писем по расписанию.
+- **GitHub Pages (точка входа):** https://ervsed.github.io/priemka-materialov/
+- **Архив старой локальной версии v1:** https://ervsed.github.io/priemka-materialov/v1/
+- **Новый центральный портал:** https://45-81-253-203.sslip.io/priemka/
+- **Почтовый сервис:** [mailer/README.md](mailer/README.md) — необязательный backend для писем по расписанию.
 
 ![Реестр материалов](docs/dashboard.png)
 
