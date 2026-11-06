@@ -22,6 +22,7 @@ import hmac
 import json
 import os
 import re
+import secrets
 import sqlite3
 import sys
 import threading
@@ -35,6 +36,7 @@ HISTORY_LIMIT = 40
 DEFAULT_MAX_BODY = 5 * 1024 * 1024
 ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,100}$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+USERNAME_RE = re.compile(r"^[A-Za-zА-Яа-яЁё0-9 ._-]{2,64}$")
 ALLOWED_ACTIONS = {"create", "edit", "archive", "restore", "undo"}
 
 
@@ -113,7 +115,20 @@ def init_db(path: str) -> None:
             """
         )
         connection.execute(
-            "INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '1')"
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                token_sha256 TEXT NOT NULL UNIQUE,
+                role TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                revoked_at TEXT
+            )
+            """
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '2')"
         )
         connection.commit()
 
@@ -366,6 +381,141 @@ def bearer_token(header: str | None) -> str:
     return value.strip()
 
 
+def token_sha256(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def authenticate(config: Config, supplied: str) -> dict | None:
+    if not supplied:
+        return None
+    if token_matches(config, supplied):
+        return {
+            "id": None,
+            "username": "Владелец",
+            "role": "admin",
+            "active": True,
+        }
+
+    digest = token_sha256(supplied)
+    with connect_db(config.db_path) as connection:
+        row = connection.execute(
+            """
+            SELECT id, username, role, active
+            FROM users
+            WHERE token_sha256 = ? AND active = 1
+            """,
+            (digest,),
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "username": row["username"],
+        "role": row["role"],
+        "active": bool(row["active"]),
+    }
+
+
+def public_user(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "username": row["username"],
+        "role": "user",
+        "active": bool(row["active"]),
+        "createdAt": row["created_at"],
+        "revokedAt": row["revoked_at"],
+    }
+
+
+def list_users(config: Config) -> list[dict]:
+    with connect_db(config.db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT id, username, role, active, created_at, revoked_at
+            FROM users
+            ORDER BY active DESC, created_at DESC
+            """
+        ).fetchall()
+    return [public_user(row) for row in rows]
+
+
+def create_user(config: Config, raw_username: object) -> dict:
+    if not isinstance(raw_username, str):
+        raise ApiError(HTTPStatus.BAD_REQUEST, "Укажите имя пользователя")
+    username = raw_username.strip()
+    if not USERNAME_RE.fullmatch(username):
+        raise ApiError(
+            HTTPStatus.BAD_REQUEST,
+            "Имя: от 2 до 64 символов, буквы, цифры, пробел, точка, дефис или подчёркивание",
+        )
+
+    token = secrets.token_urlsafe(32)
+    digest = token_sha256(token)
+    user_id = secrets.token_hex(12)
+    created_at = iso_now()
+
+    with connect_db(config.db_path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            duplicate = connection.execute(
+                "SELECT id FROM users WHERE active = 1 AND lower(username) = lower(?)",
+                (username,),
+            ).fetchone()
+            if duplicate:
+                raise ApiError(HTTPStatus.CONFLICT, "Пользователь с таким именем уже существует")
+            connection.execute(
+                """
+                INSERT INTO users(id, username, token_sha256, role, active, created_at, revoked_at)
+                VALUES (?, ?, ?, 'user', 1, ?, NULL)
+                """,
+                (user_id, username, digest, created_at),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+
+    return {
+        "id": user_id,
+        "username": username,
+        "role": "user",
+        "active": True,
+        "createdAt": created_at,
+        "revokedAt": None,
+        "token": token,
+    }
+
+
+def revoke_user(config: Config, user_id: str) -> dict:
+    revoked_at = iso_now()
+    with connect_db(config.db_path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            row = connection.execute(
+                "SELECT id FROM users WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+            if not row:
+                raise ApiError(HTTPStatus.NOT_FOUND, "Пользователь не найден")
+            connection.execute(
+                "UPDATE users SET active = 0, revoked_at = ? WHERE id = ?",
+                (revoked_at, user_id),
+            )
+            connection.commit()
+            updated = connection.execute(
+                """
+                SELECT id, username, role, active, created_at, revoked_at
+                FROM users
+                WHERE id = ?
+                """,
+                (user_id,),
+            ).fetchone()
+        except Exception:
+            connection.rollback()
+            raise
+    return public_user(updated)
+
+
 class SyncServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -458,38 +608,77 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def _require_actor(self, admin: bool = False) -> dict:
+        supplied = bearer_token(self.headers.get("Authorization"))
+        actor = authenticate(self.server.config, supplied)
+        if not actor:
+            raise ApiError(HTTPStatus.UNAUTHORIZED, "Invalid access code")
+        if admin and actor["role"] != "admin":
+            raise ApiError(HTTPStatus.FORBIDDEN, "Admin access required")
+        return actor
+
     def do_GET(self) -> None:
-        path = urlsplit(self.path).path.rstrip("/") or "/"
-        if path == "/health":
-            self._send_json(
-                HTTPStatus.OK,
-                {"ok": True, "service": "priemka-sync"},
-            )
-            return
-        self._send_json(HTTPStatus.NOT_FOUND, {"error": "Not found"})
+        try:
+            path = urlsplit(self.path).path.rstrip("/") or "/"
+            if path == "/health":
+                self._send_json(
+                    HTTPStatus.OK,
+                    {"ok": True, "service": "priemka-sync"},
+                )
+                return
+            if path == "/users":
+                self._guard_origin()
+                self._require_actor(admin=True)
+                self._send_json(
+                    HTTPStatus.OK,
+                    {"ok": True, "users": list_users(self.server.config)},
+                )
+                return
+            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Not found"})
+        except ApiError as exc:
+            self._send_json(exc.status, {"error": exc.message})
+        except Exception as exc:
+            self.log_message("internal error: %s", type(exc).__name__)
+            self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "Internal server error"})
 
     def do_POST(self) -> None:
         try:
             self._guard_origin()
             path = urlsplit(self.path).path.rstrip("/") or "/"
-            if path != "/sync":
-                raise ApiError(HTTPStatus.NOT_FOUND, "Not found")
+            parts = [part for part in path.split("/") if part]
 
-            supplied = bearer_token(self.headers.get("Authorization"))
-            if not supplied or not token_matches(self.server.config, supplied):
-                raise ApiError(HTTPStatus.UNAUTHORIZED, "Invalid access code")
+            if path == "/sync":
+                actor = self._require_actor()
+                payload = self._read_json()
+                records = sync_records(self.server.config, payload.get("records"))
+                self._send_json(
+                    HTTPStatus.OK,
+                    {
+                        "ok": True,
+                        "records": records,
+                        "count": len(records),
+                        "role": actor["role"],
+                        "serverTime": iso_now(),
+                    },
+                )
+                return
 
-            payload = self._read_json()
-            records = sync_records(self.server.config, payload.get("records"))
-            self._send_json(
-                HTTPStatus.OK,
-                {
-                    "ok": True,
-                    "records": records,
-                    "count": len(records),
-                    "serverTime": iso_now(),
-                },
-            )
+            if path == "/users":
+                self._require_actor(admin=True)
+                payload = self._read_json()
+                user = create_user(self.server.config, payload.get("username"))
+                self._send_json(HTTPStatus.CREATED, {"ok": True, "user": user})
+                return
+
+            if len(parts) == 3 and parts[0] == "users" and parts[2] == "revoke":
+                self._require_actor(admin=True)
+                if not re.fullmatch(r"[A-Za-z0-9]{8,64}", parts[1]):
+                    raise ApiError(HTTPStatus.NOT_FOUND, "Пользователь не найден")
+                user = revoke_user(self.server.config, parts[1])
+                self._send_json(HTTPStatus.OK, {"ok": True, "user": user})
+                return
+
+            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Not found"})
         except ApiError as exc:
             self._send_json(exc.status, {"error": exc.message})
         except Exception as exc:

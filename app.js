@@ -11,7 +11,7 @@ const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const INACTIVITY_MS = 30 * 60 * 1000;
 const HISTORY_LIMIT = 40;
 const UNLOCK_MARKER = 'PRIEMKA_UNLOCK_V1';
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.5.0';
 const MAX_BACKUP_BYTES = 10 * 1024 * 1024;
 const MAX_IMPORT_ROWS = 5_000;
 const MAIL_REQUEST_TIMEOUT_MS = 25_000;
@@ -131,6 +131,7 @@ const refs = {
   settingsDialog: byId('settingsDialog'),
   settingsAvatar: byId('settingsAvatar'),
   settingsUsername: byId('settingsUsername'),
+  settingsRole: byId('settingsRole'),
   settingsLockBtn: byId('settingsLockBtn'),
   settingsLockLink: byId('settingsLockLink'),
   settingsExportBtn: byId('settingsExportBtn'),
@@ -154,6 +155,19 @@ const refs = {
   importPassword: byId('importPassword'),
   importError: byId('importError'),
   importSubmit: byId('importSubmit'),
+
+  usersSummary: byId('usersSummary'),
+  usersAdminPanel: byId('usersAdminPanel'),
+  userForm: byId('userForm'),
+  userName: byId('userName'),
+  userAddBtn: byId('userAddBtn'),
+  userError: byId('userError'),
+  userInvite: byId('userInvite'),
+  userInviteName: byId('userInviteName'),
+  userInviteCode: byId('userInviteCode'),
+  copyUserCodeBtn: byId('copyUserCodeBtn'),
+  usersRefreshBtn: byId('usersRefreshBtn'),
+  usersList: byId('usersList'),
   syncSummary: byId('syncSummary'),
   syncStatusDot: byId('syncStatusDot'),
   syncStatusTitle: byId('syncStatusTitle'),
@@ -171,6 +185,7 @@ const refs = {
   syncConnectedFields: byId('syncConnectedFields'),
   syncCode: byId('syncCode'),
   syncInviteCode: byId('syncInviteCode'),
+  syncCodeLabel: byId('syncCodeLabel'),
   syncCopyCodeBtn: byId('syncCopyCodeBtn'),
   syncCreateBtn: byId('syncCreateBtn'),
   syncJoinBtn: byId('syncJoinBtn'),
@@ -245,7 +260,8 @@ const busy = {
   password: false,
   mail: false,
   sync: false,
-  import: false
+  import: false,
+  users: false
 };
 
 const mailAbortControllers = new Set();
@@ -924,6 +940,7 @@ function createDefaultSyncSettings() {
   return {
     enabled: false,
     provider: 'server',
+    role: 'admin',
     token: '',
     gistId: '',
     key: '',
@@ -961,6 +978,18 @@ function syncProviderOf(sync) {
   return 'server';
 }
 
+function currentRole() {
+  return state.sync?.role === 'user' ? 'user' : 'admin';
+}
+
+function isAdminUser() {
+  return currentRole() === 'admin';
+}
+
+function roleLabel(role = currentRole()) {
+  return role === 'user' ? 'Пользователь' : 'Администратор';
+}
+
 function normalizeSyncSettings(raw) {
   const defaults = createDefaultSyncSettings();
   if (!raw || typeof raw !== 'object') {
@@ -979,6 +1008,7 @@ function normalizeSyncSettings(raw) {
     return {
       enabled: raw.enabled === true && complete,
       provider: 'server',
+      role: raw.role === 'user' ? 'user' : 'admin',
       token: complete ? token : '',
       gistId: '',
       key: '',
@@ -997,6 +1027,7 @@ function normalizeSyncSettings(raw) {
   return {
     enabled: raw.enabled === true && complete,
     provider: 'gist',
+    role: 'admin',
     token,
     gistId,
     key: complete ? key : '',
@@ -1037,11 +1068,7 @@ function decodeBase64Url(value) {
 
 function makeSyncInviteCode(sync) {
   if (syncProviderOf(sync) === 'server') {
-    return SERVER_CODE_PREFIX + encodeBase64Url(JSON.stringify({
-      v: 2,
-      u: sync.serverUrl,
-      k: sync.token
-    }));
+    return makeServerConnectCode(sync);
   }
   return SYNC_CODE_PREFIX + encodeBase64Url(JSON.stringify({
     v: 1,
@@ -1054,7 +1081,8 @@ function makeServerConnectCode(sync) {
   return SERVER_CODE_PREFIX + encodeBase64Url(JSON.stringify({
     v: 2,
     u: sync.serverUrl,
-    k: sync.token
+    k: sync.token,
+    r: sync.role === 'user' ? 'user' : 'admin'
   }));
 }
 
@@ -1088,6 +1116,7 @@ function parseServerConnectCode(rawCode) {
   return normalizeSyncSettings({
     enabled: true,
     provider: 'server',
+    role: payload.r === 'user' ? 'user' : 'admin',
     serverUrl,
     token: payload.k
   });
@@ -1238,6 +1267,12 @@ function renderSyncFormMode() {
   refs.syncDisconnectedFields.hidden = connected;
   refs.syncGistFields.hidden = connected && provider !== 'gist';
   refs.syncInviteCode.textContent = connected ? makeSyncInviteCode(state.sync) : '—';
+  refs.syncCodeLabel.textContent = provider === 'server'
+    ? 'Код администратора'
+    : 'Код для второго устройства';
+  refs.syncCodeLabel.title = provider === 'server'
+    ? 'Даёт полный доступ. Для сотрудников создайте отдельный код в разделе «Пользователи».'
+    : '';
   refs.syncCode.readOnly = false;
   refs.syncConnectedTarget.textContent = connected
     ? provider === 'server'
@@ -1689,7 +1724,10 @@ async function exchangeServerSync(sync, records) {
     } catch {
       throw new AppError('Сервер вернул некорректный ответ.');
     }
-    return { records: validateServerSyncPayload(payload) };
+    return {
+      records: validateServerSyncPayload(payload),
+      role: payload.role === 'user' ? 'user' : 'admin'
+    };
   } catch (error) {
     if (error instanceof AppError) throw error;
     if (error.name === 'AbortError') {
@@ -1730,6 +1768,11 @@ async function performGistSync() {
     const merged = mergeRecordCollections(state.records, remote.records);
     const localChanged = canonicalRecords(merged) !== canonicalRecords(state.records);
     const remoteChanged = canonicalRecords(merged) !== canonicalRecords(remote.records);
+
+    if (provider === 'server' && remote.role && state.sync.role !== remote.role) {
+      state.sync.role = remote.role;
+      applyRoleUi({ rerender: true });
+    }
 
     if (localChanged) {
       await persistRecords(merged, { scheduleSync: false });
@@ -2887,6 +2930,7 @@ function enterApp() {
   state.mail = normalizeMailSettings(state.mail);
   state.sync = normalizeSyncSettings(state.sync);
   applyAccountLabels();
+  applyRoleUi();
   state.view = 'active';
   state.query = '';
   state.period = 'all';
@@ -2915,6 +2959,24 @@ function applyAccountLabels() {
   refs.userChip.title = `Локальный аккаунт: ${username}`;
   refs.settingsUsername.textContent = username;
   refs.settingsAvatar.textContent = username.charAt(0).toLocaleUpperCase('ru-RU');
+}
+
+function applyRoleUi({ rerender = false } = {}) {
+  const role = currentRole();
+  document.body.dataset.role = role;
+  const username = state.account?.username || state.username || 'admin';
+  refs.userChip.title = `Локальный аккаунт: ${username} · ${roleLabel(role)}`;
+  refs.settingsRole.textContent = roleLabel(role);
+  refs.settingsRole.classList.toggle('account-role--user', role === 'user');
+  if (role === 'user') {
+    setSyncEditorOpen(false);
+    setMailEditorOpen(false);
+    refs.userInvite.hidden = true;
+    if (refs.importDialog.open) closeDialog(refs.importDialog);
+  }
+  if (rerender && !refs.appView.hidden) {
+    renderLedger();
+  }
 }
 
 function lockApp(message = 'Реестр заблокирован.') {
@@ -2950,6 +3012,7 @@ function lockApp(message = 'Реестр заблокирован.') {
   state.importSession = null;
   busy.import = false;
   state.lastActivityAt = 0;
+  applyRoleUi();
 
   refs.recordsBody.replaceChildren();
   refs.unitTotals.replaceChildren();
@@ -2969,6 +3032,11 @@ function lockApp(message = 'Реестр заблокирован.') {
   refs.syncForm.reset();
   setMailEditorOpen(false);
   setSyncEditorOpen(false);
+  refs.userForm.reset();
+  refs.userInvite.hidden = true;
+  refs.userInviteCode.textContent = '';
+  delete refs.userInvite.dataset.userId;
+  refs.usersList.replaceChildren();
   setMailStatus('off', 'Не настроено', 'Автоматические письма выключены');
   setSyncStatus('off', 'Не подключено', 'Каждое устройство хранит свою копию');
   setError(refs.materialError, '');
@@ -2976,6 +3044,7 @@ function lockApp(message = 'Реестр заблокирован.') {
   setError(refs.passwordError, '');
   setError(refs.mailError, '');
   setError(refs.syncError, '');
+  setError(refs.userError, '');
 
   const loaded = readAccount();
   state.account = loaded.status === 'ok' ? loaded.account : null;
@@ -3188,12 +3257,14 @@ function createTableRow(record, duplicateCount = 0) {
   actions.className = 'row-actions';
 
   if (record.archivedAt) {
-    actions.append(makeActionButton(record, 'restore', 'restore', 'Вернуть', 'action-btn--restore'));
+    if (isAdminUser()) {
+      actions.append(makeActionButton(record, 'restore', 'restore', 'Вернуть', 'action-btn--restore'));
+    }
   } else {
-    actions.append(
-      makeActionButton(record, 'edit', 'edit', 'Изменить'),
-      makeActionButton(record, 'archive', 'archive', 'В архив', 'action-btn--archive')
-    );
+    actions.append(makeActionButton(record, 'edit', 'edit', 'Изменить'));
+    if (isAdminUser()) {
+      actions.append(makeActionButton(record, 'archive', 'archive', 'В архив', 'action-btn--archive'));
+    }
   }
   actionsCell.append(actions);
 
@@ -3673,6 +3744,10 @@ async function undoEdit(recordId, previousSnapshot, expectedUpdatedAt) {
 /* ---------- Archive / restoration ---------- */
 
 function requestArchive(recordId) {
+  if (!isAdminUser()) {
+    showToast('Архивация доступна администратору.', { type: 'error' });
+    return;
+  }
   const record = state.records.find((item) => item.id === recordId);
   if (!record || record.archivedAt) {
     showToast('Запись не найдена.', { type: 'error' });
@@ -3765,6 +3840,9 @@ async function restoreRecord(recordId, expectedUpdatedAt = null) {
   if (!state.key) {
     throw new AppError('Сессия заблокирована. Войдите снова.');
   }
+  if (!isAdminUser()) {
+    throw new AppError('Восстановление из архива доступно администратору.');
+  }
   const record = state.records.find((item) => item.id === recordId);
   if (!record || !record.archivedAt) {
     throw new AppError('Запись не найдена в архиве.');
@@ -3805,6 +3883,7 @@ function openSettings() {
   state.sync = normalizeSyncSettings(state.sync);
   clearPasswordVisibility();
   applyAccountLabels();
+  applyRoleUi();
   refs.passwordForm.reset();
   setError(refs.passwordError, '');
   refs.passwordSubmit.disabled = false;
@@ -3822,6 +3901,11 @@ function openSettings() {
   if (syncConfigurationReady(state.sync)) {
     queueGistSync(0);
   }
+  if (isAdminUser() && syncProviderOf(state.sync) === 'server' && syncConfigurationReady(state.sync)) {
+    refreshUsers();
+  } else {
+    updateUsersUnavailable();
+  }
   if (!refs.settingsDialog.open) {
     refs.settingsDialog.showModal();
   }
@@ -3832,10 +3916,15 @@ function closeSettingsAndReset() {
   setError(refs.passwordError, '');
   setError(refs.mailError, '');
   setError(refs.syncError, '');
+  setError(refs.userError, '');
   refs.mailToken.value = '';
   refs.syncToken.value = '';
   refs.syncServerCode.value = '';
   refs.syncCode.value = '';
+  refs.userForm.reset();
+  refs.userInvite.hidden = true;
+  refs.userInviteCode.textContent = '';
+  delete refs.userInvite.dataset.userId;
   clearPasswordVisibility();
   setMailEditorOpen(false);
   setSyncEditorOpen(false);
@@ -4105,6 +4194,7 @@ function finishSyncConnection(nextSync, records, message) {
   refs.syncCode.value = '';
   refs.syncInviteCode.textContent = makeSyncInviteCode(state.sync);
   renderSyncFormMode();
+  applyRoleUi({ rerender: true });
   setError(refs.syncError, '');
   setSyncStatus(
     'connected',
@@ -4373,6 +4463,8 @@ async function handleSyncDisconnect() {
     refs.syncCode.value = '';
     refs.syncInviteCode.textContent = '—';
     renderSyncFormMode();
+    applyRoleUi({ rerender: true });
+    updateUsersUnavailable();
     setSyncStatus('off', 'Не подключено', 'Синхронизация выключена, локальные записи сохранены');
     showToast('Синхронизация отключена. Локальные записи и данные на сервере сохранены.');
   } catch (error) {
@@ -4394,9 +4486,306 @@ async function handleSyncCopyCode() {
   }
   const copied = await copyToClipboard(makeSyncInviteCode(state.sync));
   if (copied) {
-    showToast('Код подключения скопирован. Передайте его на второе устройство.');
+    if (syncProviderOf(state.sync) === 'server' && isAdminUser()) {
+      showToast('Код администратора скопирован. Для сотрудников создайте отдельный код в разделе «Пользователи».', {
+        timeout: 9_000
+      });
+    } else {
+      showToast('Код подключения скопирован. Передайте его на второе устройство.');
+    }
   } else {
     setError(refs.syncError, 'Не удалось скопировать код. Выделите его вручную.');
+  }
+}
+
+/* ---------- Users and roles ---------- */
+
+async function serverAdminRequest(pathname, { method = 'GET', body = null } = {}) {
+  if (!isAdminUser()) {
+    throw new AppError('Действие доступно только администратору.');
+  }
+  if (syncProviderOf(state.sync) !== 'server' || !syncConfigurationReady(state.sync)) {
+    throw new AppError('Сначала подключите общий сервер.');
+  }
+
+  const base = normalizeServerSyncUrl(state.sync.serverUrl);
+  const controller = new AbortController();
+  syncAbortControllers.add(controller);
+  const timeoutId = window.setTimeout(() => controller.abort(), SYNC_REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${base}${pathname}`, {
+      method,
+      cache: 'no-store',
+      credentials: 'omit',
+      headers: {
+        Authorization: `Bearer ${state.sync.token}`,
+        Accept: 'application/json',
+        ...(body ? { 'Content-Type': 'application/json' } : {})
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal
+    });
+
+    let payload = null;
+    const text = await response.text();
+    if (text) {
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        payload = null;
+      }
+    }
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        throw new AppError('Сервер не принял код администратора.');
+      }
+      if (response.status === 403) {
+        throw new AppError('Управление пользователями доступно только администратору.');
+      }
+      if (response.status === 404) {
+        throw new AppError('Пользователь не найден.');
+      }
+      if (response.status === 409) {
+        throw new AppError('Пользователь с таким именем уже существует.');
+      }
+      if (response.status === 429) {
+        throw new AppError('Сервер временно ограничил частоту запросов. Повторите позже.');
+      }
+      if (response.status === 400 && payload && typeof payload.error === 'string') {
+        throw new AppError(payload.error);
+      }
+      throw new AppError(`Сервер ответил ошибкой ${response.status}.`);
+    }
+    if (!payload || typeof payload !== 'object') {
+      throw new AppError('Сервер вернул некорректный ответ.');
+    }
+    return payload;
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    if (error.name === 'AbortError') {
+      throw new AppError('Сервер не ответил вовремя. Проверьте интернет и повторите.');
+    }
+    console.error('User management request failed:', error);
+    throw new AppError('Не удалось связаться с сервером общей базы.');
+  } finally {
+    window.clearTimeout(timeoutId);
+    syncAbortControllers.delete(controller);
+  }
+}
+
+function setUsersBusy(isBusy) {
+  busy.users = isBusy;
+  refs.userName.disabled = isBusy;
+  refs.userAddBtn.disabled = isBusy;
+  refs.usersRefreshBtn.disabled = isBusy;
+  refs.userAddBtn.classList.toggle('is-busy', isBusy);
+  refs.usersRefreshBtn.classList.toggle('is-busy', isBusy);
+}
+
+function updateUsersUnavailable(message = '') {
+  refs.usersAdminPanel.hidden = true;
+  refs.usersList.replaceChildren();
+  refs.userInvite.hidden = true;
+  refs.userError.hidden = true;
+  refs.userError.textContent = '';
+  refs.usersSummary.textContent = message || 'Подключите общий сервер, чтобы добавлять пользователей.';
+}
+
+function makeUserRow({ owner = false, user = null } = {}) {
+  const row = document.createElement('li');
+  row.className = 'user-row';
+
+  const copy = document.createElement('div');
+  copy.className = 'user-row-copy';
+  const name = document.createElement('strong');
+  name.textContent = owner ? 'Владелец' : (user?.username || '—');
+  const meta = document.createElement('span');
+  if (owner) {
+    meta.textContent = 'Администратор · полный доступ';
+  } else {
+    const created = user?.createdAt && !Number.isNaN(Date.parse(user.createdAt))
+      ? `добавлен ${dateFormatter.format(new Date(user.createdAt))}`
+      : 'пользователь';
+    meta.textContent = `Пользователь · ${created}`;
+  }
+  copy.append(name, meta);
+
+  const actions = document.createElement('div');
+  actions.className = 'user-row-actions';
+  if (owner) {
+    const badge = document.createElement('span');
+    badge.className = 'user-badge';
+    badge.textContent = 'вы';
+    actions.append(badge);
+  } else {
+    const badge = document.createElement('span');
+    badge.className = user?.active ? 'user-badge' : 'user-badge user-badge--revoked';
+    badge.textContent = user?.active ? 'активен' : 'отозван';
+    actions.append(badge);
+    if (user?.active) {
+      const revoke = document.createElement('button');
+      revoke.type = 'button';
+      revoke.className = 'link-button user-revoke';
+      revoke.dataset.revokeUser = user.id;
+      revoke.dataset.revokeName = user.username;
+      revoke.textContent = 'Отозвать';
+      actions.append(revoke);
+    }
+  }
+
+  row.append(copy, actions);
+  return row;
+}
+
+function renderUsersList(users) {
+  refs.usersList.replaceChildren();
+  refs.usersList.append(makeUserRow({ owner: true }));
+
+  if (users.length === 0) {
+    const empty = document.createElement('li');
+    empty.className = 'user-empty';
+    empty.textContent = 'Пользователей пока нет. Добавьте первого сотрудника.';
+    refs.usersList.append(empty);
+  } else {
+    users.forEach((user) => {
+      refs.usersList.append(makeUserRow({ user }));
+    });
+  }
+
+  const active = users.filter((user) => user.active).length;
+  const revoked = users.length - active;
+  refs.usersSummary.textContent = users.length
+    ? `Активных пользователей: ${active}.${revoked ? ` Отозвано: ${revoked}.` : ''}`
+    : 'Пользователей пока нет. Добавьте первого сотрудника.';
+  refs.usersAdminPanel.hidden = false;
+}
+
+async function refreshUsers() {
+  if (!isAdminUser() || syncProviderOf(state.sync) !== 'server' || !syncConfigurationReady(state.sync)) {
+    updateUsersUnavailable();
+    return;
+  }
+  if (busy.users) return;
+
+  setUsersBusy(true);
+  setError(refs.userError, '');
+  refs.usersSummary.textContent = 'Загружаем пользователей…';
+  try {
+    const payload = await serverAdminRequest('/users');
+    const users = Array.isArray(payload.users) ? payload.users : [];
+    renderUsersList(users);
+  } catch (error) {
+    console.error(error);
+    const message = error instanceof AppError ? error.message : 'Не удалось загрузить пользователей.';
+    refs.usersAdminPanel.hidden = false;
+    setError(refs.userError, message);
+    refs.usersSummary.textContent = 'Список пользователей не загружен.';
+  } finally {
+    setUsersBusy(false);
+  }
+}
+
+async function handleUserAdd() {
+  if (busy.users || !isAdminUser()) return;
+  setError(refs.userError, '');
+  if (syncProviderOf(state.sync) !== 'server' || !syncConfigurationReady(state.sync)) {
+    updateUsersUnavailable();
+    return;
+  }
+
+  const username = refs.userName.value.trim();
+  if (username.length < 2 || username.length > 64) {
+    setError(refs.userError, 'Имя пользователя: от 2 до 64 символов.');
+    refs.userName.focus();
+    return;
+  }
+
+  setUsersBusy(true);
+  refs.usersSummary.textContent = 'Добавляем пользователя…';
+  try {
+    const payload = await serverAdminRequest('/users', {
+      method: 'POST',
+      body: { username }
+    });
+    const user = payload.user;
+    if (!user || !user.token) {
+      throw new AppError('Сервер не вернул код пользователя.');
+    }
+
+    const inviteSync = normalizeSyncSettings({
+      enabled: true,
+      provider: 'server',
+      role: 'user',
+      serverUrl: state.sync.serverUrl,
+      token: user.token
+    });
+    refs.userInviteName.textContent = user.username;
+    refs.userInviteCode.textContent = makeServerConnectCode(inviteSync);
+    refs.userInvite.dataset.userId = user.id;
+    refs.userInvite.hidden = false;
+    refs.userName.value = '';
+    setUsersBusy(false);
+    await refreshUsers();
+    showToast(`Пользователь ${user.username} добавлен. Скопируйте его код.`, {
+      timeout: 9_000
+    });
+  } catch (error) {
+    console.error(error);
+    setError(
+      refs.userError,
+      error instanceof AppError ? error.message : 'Не удалось добавить пользователя.'
+    );
+    refs.usersSummary.textContent = 'Не удалось добавить пользователя.';
+    setUsersBusy(false);
+  }
+}
+
+async function handleUserRevoke(userId, username) {
+  if (busy.users || !isAdminUser() || !userId) return;
+  const confirmed = window.confirm(
+    `Отозвать доступ пользователя ${username}? Синхронизация на его устройстве перестанет работать. Локальные записи останутся.`
+  );
+  if (!confirmed) return;
+
+  setUsersBusy(true);
+  setError(refs.userError, '');
+  refs.usersSummary.textContent = 'Отзываем доступ…';
+  try {
+    await serverAdminRequest(`/users/${encodeURIComponent(userId)}/revoke`, {
+      method: 'POST'
+    });
+    if (refs.userInvite.dataset.userId === userId) {
+      refs.userInvite.hidden = true;
+      refs.userInviteCode.textContent = '';
+      delete refs.userInvite.dataset.userId;
+    }
+    setUsersBusy(false);
+    await refreshUsers();
+    showToast(`Доступ пользователя ${username} отозван.`);
+  } catch (error) {
+    console.error(error);
+    setError(
+      refs.userError,
+      error instanceof AppError ? error.message : 'Не удалось отозвать доступ.'
+    );
+    refs.usersSummary.textContent = 'Не удалось отозвать доступ.';
+    setUsersBusy(false);
+  }
+}
+
+async function handleCopyUserCode() {
+  const code = refs.userInviteCode.textContent.trim();
+  if (!code) {
+    showToast('Сначала добавьте пользователя.', { type: 'error' });
+    return;
+  }
+  const copied = await copyToClipboard(code);
+  if (copied) {
+    showToast('Код пользователя скопирован. Передайте его сотруднику.');
+  } else {
+    setError(refs.userError, 'Не удалось скопировать код. Выделите его вручную.');
   }
 }
 
@@ -4419,6 +4808,10 @@ function downloadBackup() {
     showToast('Реестр не открыт. Войдите снова.', { type: 'error' });
     return;
   }
+  if (!isAdminUser()) {
+    showToast('Резервные копии доступны администратору.', { type: 'error' });
+    return;
+  }
   try {
     const envelope = makeBackupEnvelope(state.account);
     const blob = new Blob([JSON.stringify(envelope, null, 2)], { type: 'application/json;charset=utf-8' });
@@ -4439,6 +4832,10 @@ function csvCell(value) {
 }
 
 function exportCsv() {
+  if (!isAdminUser()) {
+    showToast('Экспорт доступен администратору.', { type: 'error' });
+    return;
+  }
   const records = getFilteredRecords();
   if (records.length === 0) {
     showToast('В текущей выборке нет записей для экспорта.', { type: 'error' });
@@ -4995,6 +5392,7 @@ function resetImportDialog() {
 
 function openImportDialog() {
   if (!state.key || refs.appView.hidden) return;
+  if (!isAdminUser()) return;
   if (refs.importDialog.open) return;
   resetImportDialog();
   refs.importDialog.showModal();
@@ -5255,8 +5653,7 @@ function bindEvents() {
   refs.importDialog.addEventListener('close', resetImportDialog);
   refs.importDialog.addEventListener('cancel', (event) => {
     if (busy.import) event.preventDefault();
-  });
-  ['dragenter', 'dragover'].forEach((eventName) => {
+  });  ['dragenter', 'dragover'].forEach((eventName) => {
     refs.importDropzone.addEventListener(eventName, (event) => {
       event.preventDefault();
       if (!busy.import) refs.importDropzone.classList.add('is-dragging');
@@ -5273,6 +5670,22 @@ function bindEvents() {
     if (busy.import) return;
     const file = event.dataTransfer?.files?.[0];
     if (file) handleImportFile(file);
+  });
+
+  refs.userForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    handleUserAdd();
+  });
+  refs.userAddBtn.addEventListener('click', handleUserAdd);
+  refs.usersRefreshBtn.addEventListener('click', () => refreshUsers());
+  refs.copyUserCodeBtn.addEventListener('click', handleCopyUserCode);
+  refs.userName.addEventListener('input', () => setError(refs.userError, ''));
+  refs.usersList.addEventListener('click', (event) => {
+    const target = event.target instanceof Element
+      ? event.target.closest('button[data-revoke-user]')
+      : null;
+    if (!target) return;
+    handleUserRevoke(target.dataset.revokeUser, target.dataset.revokeName || 'пользователя');
   });
 
   refs.recordsBody.addEventListener('click', (event) => {

@@ -141,6 +141,7 @@ class SyncServerTests(unittest.TestCase):
     def setUp(self):
         with closing(sqlite3.connect(self.db_path)) as connection:
             connection.execute("DELETE FROM records")
+            connection.execute("DELETE FROM users")
             connection.commit()
 
     def sync(self, records, token=TOKEN, origin=ORIGIN):
@@ -266,6 +267,64 @@ class SyncServerTests(unittest.TestCase):
         with closing(sqlite3.connect(self.db_path)) as connection:
             count = connection.execute("SELECT COUNT(*) FROM records").fetchone()[0]
         self.assertEqual(count, 0)
+
+    def test_admin_can_create_sync_and_revoke_a_user(self):
+        admin_headers = {
+            "Authorization": f"Bearer {TOKEN}",
+            "Origin": ORIGIN,
+        }
+        status, _, body = request(
+            f"{self.base}/users",
+            "POST",
+            {"username": "Прораб Иван"},
+            admin_headers,
+        )
+        self.assertEqual(status, 201)
+        user = body["user"]
+        self.assertEqual(user["username"], "Прораб Иван")
+        self.assertEqual(user["role"], "user")
+        self.assertTrue(user["token"])
+        user_token = user["token"]
+
+        status, _, body = request(f"{self.base}/users", headers=admin_headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(len(body["users"]), 1)
+        self.assertEqual(body["users"][0]["username"], "Прораб Иван")
+
+        status, _, body = self.sync([BASE_RECORD], token=user_token)
+        self.assertEqual(status, 200)
+        self.assertEqual(body["role"], "user")
+        self.assertEqual(body["count"], 1)
+
+        user_headers = {
+            "Authorization": f"Bearer {user_token}",
+            "Origin": ORIGIN,
+        }
+        status, _, _ = request(f"{self.base}/users", headers=user_headers)
+        self.assertEqual(status, 403)
+
+        status, _, _ = request(
+            f"{self.base}/users",
+            "POST",
+            {"username": "Ещё один"},
+            user_headers,
+        )
+        self.assertEqual(status, 403)
+
+        status, _, body = request(
+            f"{self.base}/users/{user['id']}/revoke",
+            "POST",
+            {},
+            admin_headers,
+        )
+        self.assertEqual(status, 200)
+        self.assertFalse(body["user"]["active"])
+
+        status, _, _ = self.sync([BASE_RECORD], token=user_token)
+        self.assertEqual(status, 401)
+        status, _, body = self.sync([BASE_RECORD])
+        self.assertEqual(status, 200)
+        self.assertEqual(body["role"], "admin")
 
 
 if __name__ == "__main__":
