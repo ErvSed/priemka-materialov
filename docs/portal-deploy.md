@@ -50,24 +50,16 @@ systemctl restart priemka-sync
 systemctl is-active priemka-sync
 ```
 
-## Серверное зеркало (необязательно)
+## Серверная часть
 
-Можно дополнительно отдавать интерфейс с того же сервера, что API:
-
-```bash
-rsync -a index.html styles.css app.js assets fonts root@server:/opt/priemka/www/
-```
+Интерфейс полностью находится на GitHub Pages. Серверный адрес `/priemka/` перенаправляет на GitHub, чтобы не было двух разных версий сайта. API остаётся на `/priemka-api/`.
 
 ```nginx
 location = /priemka {
-    return 302 /priemka/;
+    return 301 https://ervsed.github.io/priemka-materialov/;
 }
 location /priemka/ {
-    alias /opt/priemka/www/;
-    index index.html;
-    add_header X-Content-Type-Options nosniff always;
-    add_header Referrer-Policy strict-origin-when-cross-origin always;
-    add_header Cache-Control "no-cache" always;
+    return 301 https://ervsed.github.io/priemka-materialov/;
 }
 ```
 
