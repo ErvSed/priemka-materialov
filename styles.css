@@ -107,6 +107,8 @@ svg { display: block; }
 .login-card .button--wide { width: 100%; margin-top: 14px; }
 .login-hint { margin: 14px 0 0; color: var(--muted); font-size: 9.5px; line-height: 1.55; }
 .login-foot { padding-top: 18px; margin-top: 20px; color: var(--muted-2); border-top: 1px dashed var(--line); font-size: 8.5px; line-height: 1.5; }
+.login-foot a, .page-foot a { color: var(--accent-deep); text-decoration: none; }
+.login-foot a:hover, .page-foot a:hover { text-decoration: underline; }
 
 /* Buttons and fields */
 .button {

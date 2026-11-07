@@ -1,6 +1,10 @@
 'use strict';
 
-const API_BASE = '/priemka-api';
+const CENTRAL_API_BASE = 'https://45-81-253-203.sslip.io/priemka-api';
+const API_BASE = /(^|\.)github\.io$/i.test(window.location.hostname)
+  ? CENTRAL_API_BASE
+  : '/priemka-api';
+const SESSION_KEY = 'priemka.portal.session.v1';
 const HISTORY_LIMIT = 40;
 
 const $ = (id) => document.getElementById(id);
@@ -95,7 +99,29 @@ class ApiError extends Error {
   }
 }
 
+function readSessionToken() {
+  try {
+    return window.localStorage.getItem(SESSION_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function writeSessionToken(token) {
+  try {
+    if (token) window.localStorage.setItem(SESSION_KEY, token);
+    else window.localStorage.removeItem(SESSION_KEY);
+  } catch {
+    // Cookie fallback still works when the portal and API share an origin.
+  }
+}
+
+function clearSessionToken() {
+  writeSessionToken('');
+}
+
 async function api(path, { method = 'GET', body = null } = {}) {
+  const token = readSessionToken();
   let response;
   try {
     response = await fetch(API_BASE + path, {
@@ -104,6 +130,7 @@ async function api(path, { method = 'GET', body = null } = {}) {
       cache: 'no-store',
       headers: {
         Accept: 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...(body !== null ? { 'Content-Type': 'application/json' } : {})
       },
       body: body !== null ? JSON.stringify(body) : undefined
@@ -312,7 +339,10 @@ async function loadSession() {
     await loadRecords();
     if (state.account) showApp();
   } catch (error) {
-    if (error.status && error.status !== 401) {
+    if (error.status === 401) {
+      clearSessionToken();
+      showLogin();
+    } else if (error.status) {
       showLogin(error.message);
     } else {
       showLogin();
@@ -336,12 +366,14 @@ async function handleLogin(event) {
   refs.loginSubmit.textContent = 'Проверяем код…';
   try {
     const payload = await api('/login', { method: 'POST', body: { code } });
+    if (payload.sessionToken) writeSessionToken(payload.sessionToken);
     state.account = payload.account;
     await loadRecords();
     if (!state.account) return;
     showApp();
     showToast(`Добро пожаловать, ${state.account.name}.`);
   } catch (error) {
+    if (error.status === 401) clearSessionToken();
     setLoginError(error.message || 'Не удалось войти.');
     refs.loginCode.select();
   } finally {
@@ -356,11 +388,13 @@ async function logout() {
   } catch {
     // The local session is discarded even if the network request failed.
   }
+  clearSessionToken();
   showLogin();
   showToast('Вы вышли из общей базы.');
 }
 
 function handleAuthFailure() {
+  clearSessionToken();
   if (!state.account) return;
   state.account = null;
   showLogin('Сессия истекла. Войдите по коду снова.');

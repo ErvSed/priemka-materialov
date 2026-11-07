@@ -4,261 +4,232 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#16241d">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; font-src 'self'; script-src 'self'; connect-src 'self' https://45-81-253-203.sslip.io; object-src 'none'; base-uri 'none'; form-action 'self'">
   <title>ПРИЁМКА — общая база материалов</title>
-  <meta name="description" content="ПРИЁМКА — общая база материалов объекта. Вход по коду с любого устройства. Старая локальная версия сохранена как архив v1.">
-  <link rel="icon" href="./v1/assets/icon.svg" type="image/svg+xml">
-  <style>
-    @font-face {
-      font-family: "Manrope";
-      src: url("./v1/fonts/manrope-cyrillic.woff2") format("woff2");
-      font-weight: 400 800;
-      font-display: swap;
-    }
-    :root {
-      --ink: #16241d;
-      --ink-2: #22362b;
-      --paper: #f1ede4;
-      --surface: #fbf9f4;
-      --muted: #6d766f;
-      --line: #ded7c9;
-      --accent: #e85d2a;
-      --accent-deep: #c74718;
-      --font: "Manrope", "Segoe UI", Arial, sans-serif;
-    }
-    * { box-sizing: border-box; }
-    html { min-height: 100%; }
-    body {
-      min-height: 100vh;
-      margin: 0;
-      color: var(--ink);
-      font-family: var(--font);
-      background-color: var(--paper);
-      background-image:
-        radial-gradient(circle at 90% 0%, rgba(232, 93, 42, .08), transparent 30rem),
-        linear-gradient(rgba(22, 36, 29, .03) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(22, 36, 29, .03) 1px, transparent 1px);
-      background-size: auto, 34px 34px, 34px 34px;
-      -webkit-font-smoothing: antialiased;
-    }
-    .page {
-      display: flex;
-      min-height: 100vh;
-      align-items: center;
-      justify-content: center;
-      padding: 28px 18px;
-    }
-    .panel {
-      width: min(100%, 780px);
-      padding: clamp(24px, 5vw, 44px);
-      border: 1px solid var(--line);
-      border-radius: 22px;
-      background: var(--surface);
-      box-shadow: 0 30px 90px -55px rgba(22, 36, 29, .55);
-    }
-    .top {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      margin-bottom: 46px;
-    }
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      color: var(--ink);
-      text-decoration: none;
-    }
-    .mark {
-      display: grid;
-      width: 44px;
-      height: 44px;
-      place-items: center;
-      border-radius: 11px;
-      color: var(--paper);
-      background: var(--ink);
-    }
-    .mark svg { width: 25px; fill: currentColor; }
-    .brand strong {
-      display: block;
-      font-size: 15px;
-      font-weight: 800;
-      letter-spacing: .06em;
-    }
-    .brand small {
-      display: block;
-      margin-top: 1px;
-      color: var(--muted);
-      font-size: 8px;
-      font-weight: 700;
-      letter-spacing: .12em;
-      text-transform: uppercase;
-    }
-    .version {
-      padding: 5px 9px;
-      color: var(--accent-deep);
-      border: 1px solid rgba(232, 93, 42, .23);
-      border-radius: 99px;
-      background: #f9dfd3;
-      font-size: 8px;
-      font-weight: 800;
-      letter-spacing: .08em;
-      text-transform: uppercase;
-    }
-    .eyebrow {
-      margin: 0 0 10px;
-      color: var(--accent-deep);
-      font-size: 9px;
-      font-weight: 800;
-      letter-spacing: .16em;
-      text-transform: uppercase;
-    }
-    h1 {
-      max-width: 620px;
-      margin: 0;
-      font-size: clamp(2.7rem, 7vw, 4.8rem);
-      font-weight: 800;
-      letter-spacing: -.075em;
-      line-height: .9;
-    }
-    .lead {
-      max-width: 500px;
-      margin: 21px 0 0;
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.65;
-    }
-    .actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-top: 27px;
-    }
-    .button {
-      display: inline-flex;
-      min-height: 50px;
-      align-items: center;
-      justify-content: center;
-      gap: 10px;
-      padding: 0 19px;
-      border: 1px solid var(--line);
-      border-radius: 9px;
-      color: var(--ink);
-      background: transparent;
-      font-size: 12px;
-      font-weight: 750;
-      text-decoration: none;
-      transition: background-color 140ms ease, border-color 140ms ease, transform 140ms ease;
-    }
-    .button:hover { background: #fffdf8; border-color: #c7beae; }
-    .button:active { transform: translateY(1px); }
-    .button--primary {
-      color: var(--paper);
-      border-color: var(--ink);
-      background: var(--ink);
-    }
-    .button--primary:hover { border-color: var(--ink-2); background: var(--ink-2); }
-    .button .arrow {
-      font-size: 18px;
-      font-weight: 400;
-      line-height: 1;
-    }
-    .note {
-      padding-top: 20px;
-      margin-top: 29px;
-      color: var(--muted);
-      border-top: 1px dashed var(--line);
-      font-size: 10px;
-      line-height: 1.6;
-    }
-    .note strong { color: var(--ink-2); font-weight: 750; }
-    .foot {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: space-between;
-      gap: 8px;
-      margin-top: 18px;
-      color: #929a93;
-      font-size: 8.5px;
-      font-weight: 650;
-    }
-    .foot a { color: var(--accent-deep); text-decoration: none; }
-    .foot a:hover { text-decoration: underline; }
-    @media (max-width: 520px) {
-      .panel { padding: 22px 18px; border-radius: 16px; }
-      .top { margin-bottom: 34px; }
-      .actions { flex-direction: column; }
-      .button { width: 100%; }
-      h1 { font-size: clamp(2.5rem, 13vw, 3.6rem); }
-      .foot { flex-direction: column; }
-    }
-  </style>
+  <link rel="icon" href="./assets/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
-  <main class="page">
-    <section class="panel" aria-labelledby="title">
-      <header class="top">
-        <a class="brand" href="./" aria-label="ПРИЁМКА">
-          <span class="mark" aria-hidden="true">
-            <svg viewBox="0 0 32 32"><path d="M6 7h20v5H6zM6 14h20v4H6zM6 21h20v4H6z"/></svg>
-          </span>
-          <span><strong>ПРИЁМКА</strong><small>общая база материалов</small></span>
-        </a>
-        <span class="version">v2 · сервер</span>
-      </header>
+  <div class="boot" id="bootScreen">
+    <span class="boot-mark"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M6 7h20v5H6zM6 14h20v4H6zM6 21h20v4H6z"/></svg></span>
+    <span>Загружаем общую базу…</span>
+  </div>
 
-      <p class="eyebrow">Новая архитектура</p>
-      <h1 id="title">Одна база.<br>Любое устройство.</h1>
-      <p class="lead">
-        Материалы и пользователи хранятся на сервере. Вход по коду —
-        без локальных паролей и разрозненных копий. Изменения сразу видны
-        на всех устройствах.
-      </p>
-
-      <div class="actions">
-        <a class="button button--primary" href="https://45-81-253-203.sslip.io/priemka/">
-          Открыть общую базу
-          <span class="arrow" aria-hidden="true">→</span>
-        </a>
-        <a class="button" href="./v1/">
-          Архив v1
-          <span class="arrow" aria-hidden="true">↗</span>
-        </a>
+  <main class="login-view" id="loginView" hidden>
+    <section class="login-card" aria-labelledby="loginTitle">
+      <div class="brand brand--login">
+        <span class="brand-mark"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M6 7h20v5H6zM6 14h20v4H6zM6 21h20v4H6z"/></svg></span>
+        <span class="brand-copy"><strong>ПРИЁМКА</strong><small>общая база материалов</small></span>
       </div>
-
-      <p class="note">
-        <strong>Архив v1</strong> — прежняя локальная версия. Она сохранена для
-        доступа к старым данным, резервным копиям и импорту CSV. Новые записи
-        вносите только в общую базу.
-      </p>
-
-      <footer class="foot">
-        <span>ПРИЁМКА · единая база на вашем сервере</span>
-        <a href="./v1/">Вернуться в архив v1</a>
-      </footer>
+      <p class="eyebrow">Единый реестр объекта</p>
+      <h1 id="loginTitle">Вход по коду</h1>
+      <p class="login-lead">Один код открывает общую базу с любого устройства. Логин и пароль не нужны.</p>
+      <form id="loginForm" novalidate>
+        <label class="field-label" for="loginCode">Код доступа</label>
+        <div class="code-input-wrap">
+          <input id="loginCode" type="password" autocomplete="off" spellcheck="false" placeholder="adm_… или usr_…" aria-describedby="loginHint">
+          <button class="icon-button" type="button" id="loginToggle" aria-label="Показать код" title="Показать код">
+            <svg class="icon" aria-hidden="true"><use href="#i-eye"></use></svg>
+          </button>
+        </div>
+        <div class="form-error" id="loginError" role="alert" hidden></div>
+        <button class="button button--primary button--wide" type="submit" id="loginSubmit">Войти в общую базу</button>
+      </form>
+      <p class="login-hint" id="loginHint">Код выдаёт администратор. Если код утерян — попросите новый.</p>
+      <p class="login-foot">Данные находятся на сервере организации, а не в браузере. <a href="https://ervsed.github.io/priemka-materialov/v1/">Архив v1</a></p>
     </section>
   </main>
 
-  <script>
-    // The old root app registered a service worker. Remove it so the archive
-    // lives only under /v1/ and the landing page is never served from an old cache.
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', function () {
-        navigator.serviceWorker.getRegistrations()
-          .then(function (registrations) {
-            return Promise.all(registrations.map(function (registration) {
-              return registration.unregister();
-            }));
-          })
-          .then(function () {
-            if (!window.caches) return null;
-            return caches.keys().then(function (keys) {
-              return Promise.all(keys.map(function (key) { return caches.delete(key); }));
-            });
-          })
-          .catch(function () { /* no-op */ });
-      });
-    }
-  </script>
+  <div class="app" id="appView" hidden>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M6 7h20v5H6zM6 14h20v4H6zM6 21h20v4H6z"/></svg></span>
+        <span class="brand-copy"><strong>ПРИЁМКА</strong><small>общая база</small></span>
+      </div>
+      <div class="topbar-right">
+        <span class="role-pill" id="rolePill">—</span>
+        <span class="user-name" id="userName">—</span>
+        <button class="button button--ghost button--small admin-only" type="button" id="usersBtn">
+          <svg class="icon" aria-hidden="true"><use href="#i-users"></use></svg>
+          Пользователи
+        </button>
+        <button class="button button--ghost button--small" type="button" id="logoutBtn">Выйти</button>
+      </div>
+    </header>
+
+    <main class="page">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Объектный реестр · единая база</p>
+          <h1>Поступление<br>материалов</h1>
+          <p class="hero-lead">Все пользователи работают с одной базой. Изменения сразу видны на других устройствах.</p>
+        </div>
+        <button class="button button--primary button--add" type="button" id="addBtn">
+          <span class="plus">+</span>
+          Принять материал
+        </button>
+      </section>
+
+      <section class="stats" aria-label="Сводка">
+        <article class="stat stat--ink">
+          <span>В реестре</span>
+          <strong id="statActive">0</strong>
+          <small>позиций</small>
+        </article>
+        <article class="stat">
+          <span>Единицы</span>
+          <strong id="statUnits">0</strong>
+          <small>измерений</small>
+        </article>
+        <article class="stat">
+          <span>В архиве</span>
+          <strong id="statArchived">0</strong>
+          <small>сохранено</small>
+        </article>
+        <article class="stat">
+          <span>Обновлено</span>
+          <strong id="statSync" class="stat-time">—</strong>
+          <small>с сервера</small>
+        </article>
+      </section>
+
+      <section class="ledger">
+        <div class="ledger-top">
+          <div class="tabs">
+            <button class="tab is-active" type="button" id="tabActive" aria-pressed="true">Реестр <span id="activeCount">0</span></button>
+            <button class="tab" type="button" id="tabArchive" aria-pressed="false">Архив <span id="archiveCount">0</span></button>
+          </div>
+          <div class="tools">
+            <label class="search">
+              <svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg>
+              <input id="searchInput" type="search" placeholder="Найти материал…" autocomplete="off">
+            </label>
+            <select class="select" id="periodSelect" aria-label="Период">
+              <option value="all">Всё время</option>
+              <option value="today">Сегодня</option>
+              <option value="7">7 дней</option>
+              <option value="30">30 дней</option>
+            </select>
+            <button class="button button--ghost button--small admin-only" type="button" id="importBtn" title="Импортировать CSV">
+              <svg class="icon" aria-hidden="true"><use href="#i-upload"></use></svg>
+              <span>Импорт</span>
+            </button>
+            <button class="button button--ghost button--small admin-only" type="button" id="exportBtn" title="Экспорт CSV">
+              <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>
+              <span>CSV</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="duplicate-notice" id="duplicateNotice" hidden></div>
+
+        <div class="table-wrap" id="tableWrap">
+          <table class="ledger-table">
+            <caption class="sr-only">Общая ведомость материалов</caption>
+            <thead>
+              <tr><th>Дата</th><th>Наименование</th><th>Ед.</th><th>Количество</th><th><span class="sr-only">Действия</span></th></tr>
+            </thead>
+            <tbody id="recordsBody"></tbody>
+          </table>
+          <div class="empty" id="emptyState" hidden>
+            <strong id="emptyTitle">Пока пусто</strong>
+            <span id="emptyText">Добавьте первую поставку в общую базу.</span>
+          </div>
+        </div>
+
+        <footer class="ledger-foot">
+          <span class="safety">Удаления нет: только архив. Данные общие для всех пользователей.</span>
+          <span id="visibleCount">0 записей</span>
+        </footer>
+      </section>
+
+      <footer class="page-foot">ПРИЁМКА · общая база на вашем сервере · <a href="https://ervsed.github.io/priemka-materialov/v1/">Архив v1</a></footer>
+    </main>
+  </div>
+
+  <dialog class="modal" id="materialDialog" aria-labelledby="materialTitle">
+    <form class="modal-card" id="materialForm" novalidate>
+      <header class="modal-head">
+        <div><p class="eyebrow">Общая база</p><h2 id="materialTitle">Новый материал</h2></div>
+        <button class="icon-button modal-x" type="button" data-close="materialDialog" aria-label="Закрыть">
+          <svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg>
+        </button>
+      </header>
+      <div class="form-grid">
+        <label class="field"><span>Дата поступления</span><input id="materialDate" type="date" required></label>
+        <label class="field"><span>Количество</span><input id="materialQty" inputmode="decimal" placeholder="Например, 12,5" required></label>
+        <label class="field field--full"><span>Наименование</span><input id="materialName" maxlength="200" placeholder="Например, кирпич керамический" required></label>
+        <label class="field"><span>Единица</span><input id="materialUnit" list="unitOptions" maxlength="20" placeholder="шт, м², кг…" required></label>
+        <label class="field field--full"><span>Примечание <em>необязательно</em></span><textarea id="materialNote" rows="2" maxlength="500" placeholder="Поставщик, машина, место разгрузки…"></textarea></label>
+      </div>
+      <datalist id="unitOptions">
+        <option value="шт"></option><option value="м"></option><option value="м²"></option><option value="м³"></option>
+        <option value="кг"></option><option value="т"></option><option value="компл."></option><option value="упак."></option>
+        <option value="рул."></option><option value="меш."></option><option value="л"></option><option value="лист"></option>
+      </datalist>
+      <div class="form-error" id="materialError" role="alert" hidden></div>
+      <footer class="modal-actions">
+        <button class="button button--ghost" type="button" data-close="materialDialog">Отмена</button>
+        <button class="button button--primary" type="submit" id="materialSubmit">Добавить</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog class="modal" id="archiveDialog" aria-labelledby="archiveTitle">
+    <form class="modal-card modal-card--narrow" id="archiveForm">
+      <header class="modal-head">
+        <div><p class="eyebrow">Архив</p><h2 id="archiveTitle">Переместить в архив?</h2></div>
+        <button class="icon-button modal-x" type="button" data-close="archiveDialog" aria-label="Закрыть">
+          <svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg>
+        </button>
+      </header>
+      <p class="modal-lead" id="archiveLead">Запись <strong id="archiveName">—</strong> останется в базе, но будет скрыта из реестра.</p>
+      <footer class="modal-actions">
+        <button class="button button--ghost" type="button" data-close="archiveDialog">Отмена</button>
+        <button class="button button--primary" type="submit" id="archiveConfirm">В архив</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog class="modal modal--wide" id="usersDialog" aria-labelledby="usersTitle">
+    <div class="modal-card">
+      <header class="modal-head">
+        <div><p class="eyebrow">Администрирование</p><h2 id="usersTitle">Пользователи</h2></div>
+        <button class="icon-button modal-x" type="button" data-close="usersDialog" aria-label="Закрыть">
+          <svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg>
+        </button>
+      </header>
+      <p class="modal-lead">Создайте сотруднику отдельный код входа. Код показывается один раз, его можно сбросить или отозвать.</p>
+      <form class="user-create" id="userCreateForm" novalidate>
+        <label class="field"><span>Имя сотрудника</span><input id="newUserName" maxlength="64" placeholder="Например, Прораб Иван" required></label>
+        <button class="button button--primary" type="submit" id="createUserBtn">Создать код</button>
+      </form>
+      <div class="form-error" id="userError" role="alert" hidden></div>
+      <div class="new-code" id="newCodeBox" hidden>
+        <div><span id="newCodeTitle">Код создан</span><button class="link-button" type="button" id="copyNewCodeBtn">Скопировать</button></div>
+        <code id="newCodeValue"></code>
+        <p>Передайте код сотруднику. Вход выполняется по этому коду с любого устройства.</p>
+      </div>
+      <div class="users-head"><strong>Доступ к базе</strong><button class="link-button" type="button" id="refreshUsersBtn">Обновить</button></div>
+      <ul class="users-list" id="usersList"></ul>
+    </div>
+  </dialog>
+
+  <input type="file" id="importFile" accept=".csv,text/csv" hidden>
+  <div class="toast-region" id="toastRegion" role="status" aria-live="polite"></div>
+
+  <svg class="svg-sprite" aria-hidden="true">
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="m3 3 18 18M10.6 6c.46-.08.92-.12 1.4-.12 6 0 9.5 6.12 9.5 6.12a16.4 16.4 0 0 1-2.3 3.13M6.1 7.6A16.5 16.5 0 0 0 2.5 12s3.5 6.5 9.5 6.5c1.63 0 3.08-.47 4.33-1.17M9.9 9.9a3 3 0 0 0 4.2 4.2"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3.5 19c.4-3.2 2.3-5 5.5-5s5.1 1.8 5.5 5M16 5.5a2.8 2.8 0 0 1 0 5.5M17.5 14c2.3.3 3.6 1.9 4 4.5"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M5 20h14"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="m4 16-.8 4.8L8 20 19 9a2.1 2.1 0 0 0-3-3L5 17Z"/><path d="m14.5 7.5 3 3"/></symbol>
+    <symbol id="i-archive" viewBox="0 0 24 24"><path d="M3.5 7.5h5.7l2 2h9.3v8.5a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5V7.5Z"/><path d="M12 11.5v5M9.8 14.3 12 16.5l2.2-2.2"/></symbol>
+    <symbol id="i-restore" viewBox="0 0 24 24"><path d="M4 10a8 8 0 1 1 2.4 6.4"/><path d="M4 4v6h6"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+  </svg>
+  <script type="module" src="./app.js"></script>
 </body>
 </html>

@@ -911,8 +911,11 @@ class Handler(BaseHTTPRequestHandler):
         return "; ".join(parts)
 
     def _current_account(self, admin: bool = False) -> dict:
-        token = self._cookie(SESSION_COOKIE)
-        account = session_account(self.server.config, token)
+        supplied = bearer_token(self.headers.get("Authorization"))
+        account = session_account(self.server.config, supplied) if supplied else None
+        if not account:
+            token = self._cookie(SESSION_COOKIE)
+            account = session_account(self.server.config, token)
         if not account:
             raise ApiError(HTTPStatus.UNAUTHORIZED, "Требуется вход")
         if admin and account["role"] != "admin":
@@ -985,12 +988,15 @@ class Handler(BaseHTTPRequestHandler):
                 token = create_session(self.server.config, account["id"])
                 self._send_json(
                     HTTPStatus.OK,
-                    {"ok": True, "account": account},
+                    {"ok": True, "account": account, "sessionToken": token},
                     {"Set-Cookie": self._session_cookie(token)},
                 )
                 return
 
             if path == "/logout":
+                bearer = bearer_token(self.headers.get("Authorization"))
+                if bearer:
+                    delete_session(self.server.config, bearer)
                 token = self._cookie(SESSION_COOKIE)
                 delete_session(self.server.config, token)
                 self._send_json(
