@@ -86,8 +86,18 @@ def load_config() -> Config:
     )
 
 
+class ClosingConnection(sqlite3.Connection):
+    """SQLite connection that is closed after the transaction context."""
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
+
 def connect_db(path: str) -> sqlite3.Connection:
-    connection = sqlite3.connect(path, timeout=20)
+    connection = sqlite3.connect(path, timeout=20, factory=ClosingConnection)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA busy_timeout = 10000")
     connection.execute("PRAGMA foreign_keys = ON")

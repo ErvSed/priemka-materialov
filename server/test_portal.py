@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -101,6 +102,12 @@ class PortalApiTests(unittest.TestCase):
         self.assertEqual(status, 401)
         status, _ = self.request("/records")
         self.assertEqual(status, 401)
+
+    def test_db_connection_closes_after_context(self) -> None:
+        with priemka_sync.connect_db(self.config.db_path) as connection:
+            self.assertEqual(connection.execute("SELECT 1").fetchone()[0], 1)
+        with self.assertRaises(sqlite3.ProgrammingError):
+            connection.execute("SELECT 1")
 
     def test_admin_creates_worker_shared_record_and_revokes(self) -> None:
         self.login_admin()
